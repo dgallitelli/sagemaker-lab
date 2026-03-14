@@ -9,7 +9,7 @@ import sys
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 logging.basicConfig(
     level=logging.INFO,
@@ -198,7 +198,7 @@ def prepare_and_save(
     train_rows_raw: List[Dict],
     test_rows_raw: List[Dict],
     output_dir: Path,
-    extra_corpus_rows: List[Dict] | None = None,
+    extra_corpus_rows: Optional[List[Dict]] = None,
     full_corpus_loader=None,
 ) -> None:
     """

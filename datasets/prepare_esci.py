@@ -14,12 +14,15 @@ import logging
 import random
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from common import LABEL_SCORES, logger, prepare_and_save
 
+# tasksource/esci uses full words; map to single-letter ESCI labels
+_LABEL_MAP = {"Exact": "E", "Substitute": "S", "Complement": "C", "Irrelevant": "I"}
 
-def load_esci(max_pairs: int | None = None) -> Tuple[List[Dict], List[Dict]]:
+
+def load_esci(max_pairs: Optional[int] = None) -> Tuple[List[Dict], List[Dict]]:
     """
     Load Amazon ESCI from Hugging Face Hub (US locale only).
     Optionally subsample training pairs (stratified by label).
@@ -27,41 +30,25 @@ def load_esci(max_pairs: int | None = None) -> Tuple[List[Dict], List[Dict]]:
     """
     from datasets import load_dataset
 
-    candidates = [
-        "tasksource/amazon-esci",
-        "amazon-esci-data",
-        "amazon-research/esci-data",
-    ]
+    logger.info("Loading tasksource/esci from Hugging Face...")
+    ds = load_dataset("tasksource/esci")
 
-    ds = None
-    for dataset_id in candidates:
-        try:
-            logger.info(f"Trying HuggingFace dataset: {dataset_id}")
-            ds = load_dataset(dataset_id)
-            break
-        except Exception as e:
-            logger.warning(f"Failed to load {dataset_id}: {e}")
-            continue
-
-    if ds is None:
-        raise RuntimeError("All HuggingFace ESCI candidates failed")
-
-    train_rows_raw = [row for row in ds["train"] if row.get("query_locale") == "us"]
+    train_rows_raw = [row for row in ds["train"] if row.get("product_locale") == "us"]
     test_split = "test" if "test" in ds else "validation"
-    test_rows_raw = [row for row in ds[test_split] if row.get("query_locale") == "us"]
+    test_rows_raw = [row for row in ds[test_split] if row.get("product_locale") == "us"]
 
     logger.info(f"Loaded ESCI: {len(train_rows_raw)} train, {len(test_rows_raw)} test (US locale)")
 
     def normalize(row: Dict) -> Dict:
         return {
             "query_id": str(row.get("query_id", "")),
-            "query": str(row.get("query", "")),
+            "query": str(row.get("query", "")).strip(),
             "product_id": str(row.get("product_id", "")),
-            "esci_label": str(row.get("esci_label", "I")),
+            "esci_label": _LABEL_MAP.get(row.get("esci_label", ""), "I"),
             "query_locale": "us",
-            "title": str(row.get("product_title", row.get("title", ""))),
-            "description": str(row.get("product_description", row.get("description", ""))),
-            "bullet_points": str(row.get("product_bullet_point", row.get("bullet_points", ""))),
+            "title": str(row.get("product_title", "") or ""),
+            "description": str(row.get("product_description", "") or ""),
+            "bullet_points": str(row.get("product_bullet_point", "") or ""),
         }
 
     train_rows = [normalize(r) for r in train_rows_raw]
