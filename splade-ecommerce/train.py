@@ -230,7 +230,7 @@ def run_training_phase(
         num_train_epochs=1,
         per_device_train_batch_size=hp.get("batch_size", 32),
         learning_rate=float(hp.get("learning_rate", 2e-5)),
-        warmup_ratio=float(hp.get("warmup_ratio", 0.1)),
+        warmup_steps=float(hp.get("warmup_ratio", 0.1)),  # float = warmup ratio in Transformers v5+
         fp16=torch.cuda.is_available(),
         dataloader_num_workers=0,  # 0 avoids fork issues on macOS
         logging_steps=50,
