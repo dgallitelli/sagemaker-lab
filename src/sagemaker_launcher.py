@@ -172,7 +172,7 @@ def run_sagemaker(args: argparse.Namespace, config: dict) -> None:
     session = Session()
     region = session.boto_region_name
     role = args.role or _get_sagemaker_role()
-    s3_bucket = args.s3_bucket
+    s3_bucket = args.s3_bucket or session.default_bucket()
     data_prefix = args.data_prefix.strip("/")
 
     logger.info(f"Region: {region} | Role: {role}")
@@ -315,7 +315,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--local-output", default="./local_model_output", help="Local output dir")
 
     # SageMaker args
-    parser.add_argument("--s3-bucket", help="S3 bucket for data and model artifacts")
+    parser.add_argument("--s3-bucket", help="S3 bucket (defaults to SageMaker default bucket)")
     parser.add_argument("--data-prefix", default="splade-esci/data", help="S3 prefix for training data")
     parser.add_argument("--role", help="IAM role ARN (defaults to execution role)")
     parser.add_argument("--skip-upload", action="store_true", help="Skip data upload to S3")
@@ -331,9 +331,6 @@ def main() -> None:
     if args.local:
         run_local(args, config)
     else:
-        if not args.s3_bucket:
-            logger.error("--s3-bucket is required for SageMaker mode. Use --local for local testing.")
-            sys.exit(1)
         run_sagemaker(args, config)
 
 

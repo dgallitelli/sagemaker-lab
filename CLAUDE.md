@@ -31,11 +31,13 @@ deploy_endpoint.py              # Deploy trained model to SageMaker TEI endpoint
 ## Execution Order
 
 ```bash
-# 1. Prepare data and BM25 baseline (pick one or more datasets)
-python datasets/prepare_esci.py --output-dir data/esci
-python datasets/prepare_esci.py --output-dir data/esci --max-pairs 200000  # subsample
+# 1a. Prepare data LOCALLY (small datasets)
 python datasets/prepare_fiqa.py --output-dir data/fiqa
 python datasets/prepare_nfcorpus.py --output-dir data/nfcorpus
+
+# 1b. Prepare data on SAGEMAKER PROCESSING (large datasets)
+python datasets/sagemaker_processing.py --dataset esci                    # full ~1.4M pairs
+python datasets/sagemaker_processing.py --dataset esci --max-pairs 200000 # subsample
 
 # 2. Train locally (truncated for fast iteration)
 python src/sagemaker_launcher.py --local --data-dir data/fiqa
@@ -44,8 +46,8 @@ python src/sagemaker_launcher.py --local --data-dir data/fiqa
 python src/sagemaker_launcher.py --local --data-dir data/fiqa --no-truncate \
   --local-output local_model_output_fiqa_full
 
-# 4. Train on SageMaker (large datasets like ESCI)
-python src/sagemaker_launcher.py --s3-bucket <bucket> --data-prefix splade-esci/data
+# 4. Train on SageMaker (uses default bucket; data-prefix matches processing output)
+python src/sagemaker_launcher.py --data-prefix splade-data/esci --skip-upload
 
 # 5. Deploy / cleanup
 python deploy_endpoint.py --model-artifact s3://<bucket>/splade-training-output/model.tar.gz
