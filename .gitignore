@@ -1,0 +1,35 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Data (too large for git)
+data/
+
+# Local training output
+local_model_output/
+
+# AWS / SageMaker
+.aws/
+*.tar.gz
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Logs and debug files
+logs/
+*.log
+firebase-debug.log
+
+# Session files
+.continue-here.md
+.claude/
+
+# Blog post (not for repo)
+aws_blog_post.md
