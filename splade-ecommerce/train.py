@@ -230,7 +230,7 @@ def run_training_phase(
         num_train_epochs=1,
         per_device_train_batch_size=hp.get("batch_size", 32),
         learning_rate=float(hp.get("learning_rate", 2e-5)),
-        warmup_steps=float(hp.get("warmup_ratio", 0.1)),  # float = ratio in Transformers v5+
+        warmup_ratio=float(hp.get("warmup_ratio", 0.1)),
         fp16=torch.cuda.is_available(),
         dataloader_num_workers=0,  # 0 avoids fork issues on macOS
         logging_steps=50,
@@ -331,11 +331,6 @@ def main() -> None:
             pid = pair.get("positive_id") or pair.get("product_id")
             query_to_positives.setdefault(qid, []).append(pid)
 
-    mining_queries = [
-        {"query_id": qid, "query": train_pairs[0]["query"], "positive_ids": pids}
-        for qid, pids in query_to_positives.items()
-    ]
-    # Recover actual query text (we lost it above — rebuild properly)
     query_text_map = {p["query_id"]: p["query"] for p in train_pairs}
     mining_queries = [
         {"query_id": qid, "query": query_text_map.get(qid, ""), "positive_ids": pids}

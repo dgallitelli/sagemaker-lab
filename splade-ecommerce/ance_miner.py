@@ -47,11 +47,12 @@ class ANCEMiner:
 
         for i in iterator:
             batch = texts[i : i + batch_size]
-            embeddings = model.encode(
+            result = model.encode(
                 batch,
                 show_progress_bar=False,
                 convert_to_sparse_tensor=False,
-            ).cpu().numpy()
+            )
+            embeddings = result.cpu().numpy() if hasattr(result, "cpu") else result
             for emb in embeddings:
                 # SPLADE output: dense array with many zeros
                 nonzero_mask = emb > 0

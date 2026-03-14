@@ -219,11 +219,12 @@ def _encode_to_sparse_matrix(
     row_offset = 0
     for i in iterator:
         batch = texts[i : i + batch_size]
-        embeddings = model.encode(
+        result = model.encode(
             batch,
             show_progress_bar=False,
             convert_to_sparse_tensor=False,
-        ).cpu().numpy()
+        )
+        embeddings = result.cpu().numpy() if hasattr(result, "cpu") else result
 
         if vocab_size is None:
             vocab_size = embeddings.shape[1]
