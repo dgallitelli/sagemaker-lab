@@ -422,10 +422,76 @@ def print_summary_table(bm25_results: Dict, dataset_stats: Dict) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+def load_nfcorpus_from_huggingface() -> Tuple[List[Dict], List[Dict]]:
+    """
+    Load mteb/nfcorpus (biomedical retrieval, 3633 corpus docs, graded relevance).
+    Score mapping: 2.0 → E (highly relevant), 1.0 → S (relevant), else → I.
+    Returns (train_rows, test_rows) in the normalized ESCI schema.
+    """
+    from datasets import load_dataset
+
+    logger.info("Loading mteb/nfcorpus...")
+    qrels_ds = load_dataset("mteb/nfcorpus")
+    queries_ds = load_dataset("mteb/nfcorpus", "queries")["queries"]
+    corpus_ds = load_dataset("mteb/nfcorpus", "corpus")["corpus"]
+
+    query_map = {row["_id"]: row["text"] for row in queries_ds}
+    corpus_map = {
+        row["_id"]: {"title": row.get("title", ""), "description": row.get("text", "")}
+        for row in corpus_ds
+    }
+
+    def qrels_to_rows(split: str) -> List[Dict]:
+        rows = []
+        for row in qrels_ds[split]:
+            qid = str(row["query-id"])
+            pid = str(row["corpus-id"])
+            score = float(row["score"])
+            label = "E" if score >= 2.0 else ("S" if score >= 1.0 else "I")
+            query_text = query_map.get(qid, "")
+            product = corpus_map.get(pid, {})
+            if not query_text or not product:
+                continue
+            rows.append({
+                "query_id": qid,
+                "query": query_text,
+                "product_id": pid,
+                "esci_label": label,
+                "query_locale": "us",
+                "title": product.get("title", ""),
+                "description": product.get("description", ""),
+                "bullet_points": "",
+            })
+        return rows
+
+    train_rows = qrels_to_rows("train")
+    test_rows = qrels_to_rows("test")
+
+    # Include full corpus (all 3633 docs) so retrieval is against complete pool
+    corpus_rows = [
+        {"query_id": "", "query": "", "product_id": str(r["_id"]),
+         "esci_label": "I", "query_locale": "us",
+         "title": r.get("title", ""), "description": r.get("text", ""), "bullet_points": ""}
+        for r in corpus_ds
+    ]
+
+    logger.info(
+        f"Loaded mteb/nfcorpus: {len(train_rows)} train pairs, {len(test_rows)} test pairs, "
+        f"{len(corpus_map)} corpus documents"
+    )
+    return train_rows, test_rows, corpus_rows
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Prepare ESCI dataset and BM25 baseline")
+    parser = argparse.ArgumentParser(description="Prepare retrieval dataset and BM25 baseline")
     parser.add_argument("--output-dir", default="data", help="Output directory for data files")
-    parser.add_argument("--synthetic", action="store_true", help="Force synthetic dataset (skip HF download)")
+    parser.add_argument("--synthetic", action="store_true", help="Force synthetic dataset")
+    parser.add_argument(
+        "--dataset",
+        choices=["esci", "fiqa", "nfcorpus", "synthetic"],
+        default=None,
+        help="Force a specific dataset (default: try esci → fiqa → synthetic)",
+    )
     return parser.parse_args()
 
 
@@ -435,23 +501,36 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Load dataset ─────────────────────────────────────────────────────────
-    if args.synthetic:
+    dataset_choice = args.dataset or ("synthetic" if args.synthetic else "auto")
+    extra_corpus_rows: List[Dict] = []
+
+    if dataset_choice == "synthetic":
         train_rows_raw, test_rows_raw = generate_synthetic_dataset()
-    else:
+    elif dataset_choice == "fiqa":
+        train_rows_raw, test_rows_raw = load_fiqa_from_huggingface()
+    elif dataset_choice == "nfcorpus":
+        train_rows_raw, test_rows_raw, extra_corpus_rows = load_nfcorpus_from_huggingface()
+    elif dataset_choice == "esci":
+        train_rows_raw, test_rows_raw = load_esci_from_huggingface()
+        train_rows_raw = [normalize_row(r) for r in train_rows_raw]
+        test_rows_raw = [normalize_row(r) for r in test_rows_raw]
+    else:  # auto
         try:
             train_rows_raw, test_rows_raw = load_esci_from_huggingface()
             train_rows_raw = [normalize_row(r) for r in train_rows_raw]
             test_rows_raw = [normalize_row(r) for r in test_rows_raw]
+            dataset_choice = "esci"
         except Exception as e:
-            logger.warning(f"ESCI download failed: {e}")
-            logger.info("Falling back to mteb/fiqa retrieval benchmark")
+            logger.warning(f"ESCI failed: {e}. Falling back to mteb/fiqa")
             try:
                 train_rows_raw, test_rows_raw = load_fiqa_from_huggingface()
+                dataset_choice = "fiqa"
             except Exception as e2:
-                logger.warning(f"FiQA download failed: {e2}")
-                logger.info("Falling back to synthetic dataset")
+                logger.warning(f"FiQA failed: {e2}. Falling back to synthetic")
                 train_rows_raw, test_rows_raw = generate_synthetic_dataset()
+                dataset_choice = "synthetic"
 
+    logger.info(f"Dataset: {dataset_choice}")
     all_rows = train_rows_raw + test_rows_raw
 
     # ── Build splits ─────────────────────────────────────────────────────────
@@ -459,9 +538,20 @@ def main() -> None:
     test_pairs = build_test_pairs(test_rows_raw)
     corpus = build_corpus(all_rows)
 
-    # For fiqa, also include the full corpus (not just qrels-mentioned products)
-    # so retrieval evaluation is against the full 57K document pool
-    if not args.synthetic:
+    # Extend corpus with full document pool when available
+    if extra_corpus_rows:
+        seen = {p["product_id"] for p in corpus}
+        for row in extra_corpus_rows:
+            if row["product_id"] and row["product_id"] not in seen:
+                corpus.append({
+                    "product_id": row["product_id"],
+                    "title": row.get("title", ""),
+                    "description": row.get("description", ""),
+                    "bullet_points": "",
+                })
+                seen.add(row["product_id"])
+        logger.info(f"Extended corpus to {len(corpus)} documents")
+    elif dataset_choice == "fiqa":
         try:
             from datasets import load_dataset as _ld
             corpus_ds = _ld("mteb/fiqa", "corpus")["corpus"]
@@ -469,16 +559,12 @@ def main() -> None:
             for row in corpus_ds:
                 pid = str(row["_id"])
                 if pid not in seen:
-                    corpus.append({
-                        "product_id": pid,
-                        "title": row.get("title", ""),
-                        "description": row.get("text", ""),
-                        "bullet_points": "",
-                    })
+                    corpus.append({"product_id": pid, "title": row.get("title", ""),
+                                   "description": row.get("text", ""), "bullet_points": ""})
                     seen.add(pid)
             logger.info(f"Extended corpus to {len(corpus)} documents (full fiqa corpus)")
         except Exception:
-            pass  # use qrels-only corpus if extension fails
+            pass
     qrels = build_qrels(test_rows_raw)
 
     # ── Dataset statistics ───────────────────────────────────────────────────
