@@ -33,6 +33,7 @@ class SpladeEvaluator:
 
     def __init__(self, bm25_baseline_path: Optional[str] = None):
         self.bm25_results: Optional[Dict] = None
+        self.zeroshot_results: Optional[Dict] = None
         if bm25_baseline_path and Path(bm25_baseline_path).exists():
             with open(bm25_baseline_path) as f:
                 self.bm25_results = json.load(f)
@@ -122,26 +123,103 @@ class SpladeEvaluator:
         self._print_results(results)
         return results
 
+    def evaluate_zeroshot(
+        self,
+        corpus: List[Dict],
+        test_queries: List[Dict],
+        qrels: Dict[str, Dict[str, float]],
+        base_model_name: str = "naver/splade-cocondenser-ensembledistil",
+        eval_batch_size: int = 64,
+        show_progress: bool = True,
+    ) -> Dict[str, float]:
+        """
+        Evaluate the base SPLADE model (no fine-tuning) as a zero-shot baseline.
+        Stores results internally for comparison in _print_results.
+        """
+        logger.info(f"Loading zero-shot baseline model: {base_model_name}")
+        zs_model = SparseEncoder(base_model_name)
+
+        logger.info("Evaluating zero-shot SPLADE baseline...")
+        product_ids = [p["product_id"] for p in corpus]
+
+        corpus_texts = [_build_product_text(p) for p in corpus]
+        corpus_matrix = _encode_to_sparse_matrix(
+            zs_model, corpus_texts, eval_batch_size, show_progress
+        )
+
+        query_texts = [q["query"] for q in test_queries]
+        query_matrix = _encode_to_sparse_matrix(
+            zs_model, query_texts, eval_batch_size, show_progress
+        )
+
+        ndcg_scores, recall_scores, mrr_scores = [], [], []
+        for i, query in enumerate(test_queries):
+            qid = query["query_id"]
+            if qid not in qrels or not qrels[qid]:
+                continue
+            scores = corpus_matrix.dot(query_matrix[i].T).toarray().flatten()
+            ranked_indices = np.argsort(scores)[::-1]
+            ranked_pids = [product_ids[idx] for idx in ranked_indices]
+            query_qrels = qrels[qid]
+            ndcg_scores.append(ndcg_at_k(ranked_pids, query_qrels, k=10))
+            recall_scores.append(recall_at_k(ranked_pids, query_qrels, k=100))
+            mrr_scores.append(mrr_at_k(ranked_pids, query_qrels, k=10))
+
+        results = {
+            "ndcg@10": float(np.mean(ndcg_scores)) if ndcg_scores else 0.0,
+            "recall@100": float(np.mean(recall_scores)) if recall_scores else 0.0,
+            "mrr@10": float(np.mean(mrr_scores)) if mrr_scores else 0.0,
+        }
+
+        self.zeroshot_results = results
+        logger.info(f"Zero-shot baseline: {results}")
+
+        # Free model memory
+        del zs_model
+
+        return results
+
     def _print_results(self, splade_results: Dict[str, float]) -> None:
-        """Print comparison table: BM25 vs SPLADE."""
-        print("\n" + "=" * 60)
-        print(f"{'Metric':<15} {'BM25':>12} {'SPLADE':>12} {'Delta':>12}")
-        print("-" * 60)
+        """Print comparison table: BM25 vs zero-shot vs fine-tuned SPLADE."""
+        has_zs = self.zeroshot_results is not None
+        has_bm25 = self.bm25_results is not None
 
-        for metric in ["ndcg@10", "recall@100", "mrr@10"]:
-            splade_val = splade_results.get(metric, 0.0)
-            if self.bm25_results:
-                bm25_val = self.bm25_results.get(metric, 0.0)
-                delta = splade_val - bm25_val
-                delta_pct = (delta / bm25_val * 100) if bm25_val > 0 else 0.0
-                delta_str = f"{delta_pct:+.1f}%"
+        if has_zs:
+            print("\n" + "=" * 75)
+            print(f"{'Metric':<15} {'BM25':>10} {'Zero-shot':>10} {'Fine-tuned':>10} {'vs BM25':>10} {'vs ZS':>10}")
+            print("-" * 75)
+
+            for metric in ["ndcg@10", "recall@100", "mrr@10"]:
+                ft_val = splade_results.get(metric, 0.0)
+                zs_val = self.zeroshot_results.get(metric, 0.0)
+                bm25_val = self.bm25_results.get(metric, 0.0) if has_bm25 else 0.0
+
+                bm25_str = f"{bm25_val:.4f}" if has_bm25 else "N/A"
+                vs_bm25 = f"{(ft_val - bm25_val) / bm25_val * 100:+.1f}%" if has_bm25 and bm25_val > 0 else "N/A"
+                vs_zs = f"{(ft_val - zs_val) / zs_val * 100:+.1f}%" if zs_val > 0 else "N/A"
+
                 print(
-                    f"{metric:<15} {bm25_val:>12.4f} {splade_val:>12.4f} {delta_str:>12}"
+                    f"{metric:<15} {bm25_str:>10} {zs_val:>10.4f} {ft_val:>10.4f} {vs_bm25:>10} {vs_zs:>10}"
                 )
-            else:
-                print(f"{metric:<15} {'N/A':>12} {splade_val:>12.4f} {'N/A':>12}")
 
-        print("=" * 60 + "\n")
+            print("=" * 75 + "\n")
+        else:
+            print("\n" + "=" * 60)
+            print(f"{'Metric':<15} {'BM25':>12} {'SPLADE':>12} {'Delta':>12}")
+            print("-" * 60)
+
+            for metric in ["ndcg@10", "recall@100", "mrr@10"]:
+                splade_val = splade_results.get(metric, 0.0)
+                if has_bm25:
+                    bm25_val = self.bm25_results.get(metric, 0.0)
+                    delta_pct = (splade_val - bm25_val) / bm25_val * 100 if bm25_val > 0 else 0.0
+                    print(
+                        f"{metric:<15} {bm25_val:>12.4f} {splade_val:>12.4f} {delta_pct:+.1f}%".rjust(12)
+                    )
+                else:
+                    print(f"{metric:<15} {'N/A':>12} {splade_val:>12.4f} {'N/A':>12}")
+
+            print("=" * 60 + "\n")
 
 
 # ---------------------------------------------------------------------------

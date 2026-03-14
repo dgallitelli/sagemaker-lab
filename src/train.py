@@ -121,14 +121,14 @@ def load_dataset(training_dir: Path, local_mode: bool = False) -> Tuple[List, Li
         )
         corpus = [p for p in corpus if p["product_id"] in relevant_pids][:max_corpus]
 
-    # Build qrels from test pairs
+    # Build qrels from test pairs (prefer raw_score for graded datasets like NFCorpus)
     LABEL_SCORES = {"E": 1.0, "S": 0.5, "C": 0.1, "I": 0.0}
     qrels: Dict[str, Dict[str, float]] = {}
     test_queries_map: Dict[str, str] = {}
     for pair in test_pairs:
         qid = pair["query_id"]
         pid = pair["product_id"]
-        score = LABEL_SCORES.get(pair.get("esci_label", "I"), 0.0)
+        score = pair.get("raw_score", LABEL_SCORES.get(pair.get("esci_label", "I"), 0.0))
         qrels.setdefault(qid, {})[pid] = score
         test_queries_map[qid] = pair["query"]
 
@@ -381,6 +381,19 @@ def main() -> None:
     final_evaluator = SpladeEvaluator(
         bm25_baseline_path=str(BM25_BASELINE_PATH) if BM25_BASELINE_PATH.exists() else None
     )
+
+    # Zero-shot baseline (base model, no fine-tuning) — establishes what
+    # SPLADE gives "for free" vs what our fine-tuning adds
+    logger.info("=== ZERO-SHOT BASELINE ===")
+    zeroshot_results = final_evaluator.evaluate_zeroshot(
+        corpus, test_queries, qrels,
+        base_model_name=base_model,
+        eval_batch_size=eval_batch_size,
+    )
+    for metric, value in zeroshot_results.items():
+        log_metric(f"zeroshot/{metric}", value)
+
+    # Fine-tuned model eval (prints 3-row comparison: BM25 | zero-shot | fine-tuned)
     final_results = final_evaluator.evaluate(
         model, corpus, test_queries, qrels, eval_batch_size=eval_batch_size
     )
@@ -397,6 +410,7 @@ def main() -> None:
         json.dump(
             {
                 "final": final_results,
+                "zeroshot": zeroshot_results,
                 "per_ance_iter": eval_results_per_phase,
                 "hyperparameters": hp,
             },

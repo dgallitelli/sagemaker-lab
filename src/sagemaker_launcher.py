@@ -2,14 +2,17 @@
 SageMaker training job launcher for SPLADE fine-tuning.
 
 Usage:
-  # Run full SageMaker job (ml.g5.12xlarge spot instance):
-  python sagemaker_launcher.py --s3-bucket my-bucket --data-prefix data/esci
+  # Run locally (ESCI, full dataset):
+  python src/sagemaker_launcher.py --local --data-dir data/esci --no-truncate
 
-  # Run locally without any AWS credentials (fast iteration):
-  python sagemaker_launcher.py --local --data-dir ../data
+  # Run locally (FiQA, truncated for fast iteration):
+  python src/sagemaker_launcher.py --local --data-dir data/fiqa
+
+  # Run full SageMaker job:
+  python src/sagemaker_launcher.py --s3-bucket my-bucket --data-prefix data/esci
 
   # Dry run (print config, don't submit):
-  python sagemaker_launcher.py --s3-bucket my-bucket --dry-run
+  python src/sagemaker_launcher.py --s3-bucket my-bucket --dry-run
 """
 
 import argparse
@@ -66,15 +69,24 @@ def run_local(args: argparse.Namespace, config: dict) -> None:
         sys.exit(1)
 
     local_cfg = config.get("local", {})
+    if args.no_truncate:
+        max_train = "999999"
+        max_test = "999999"
+        max_corpus = "999999"
+    else:
+        max_train = str(local_cfg.get("max_train_queries", 500))
+        max_test = str(local_cfg.get("max_test_queries", 100))
+        max_corpus = str(local_cfg.get("max_corpus_products", 5000))
+
     env = {
         **os.environ,
         "SM_MODEL_DIR": str(output_dir),
         "SM_CHANNEL_TRAINING": str(data_dir),
         "SM_HPS_PATH": "/dev/null",  # use config.yaml defaults
         "LOCAL_MODE": "1",
-        "LOCAL_MAX_TRAIN": str(local_cfg.get("max_train_queries", 500)),
-        "LOCAL_MAX_TEST": str(local_cfg.get("max_test_queries", 100)),
-        "LOCAL_MAX_CORPUS": str(local_cfg.get("max_corpus_products", 5000)),
+        "LOCAL_MAX_TRAIN": max_train,
+        "LOCAL_MAX_TEST": max_test,
+        "LOCAL_MAX_CORPUS": max_corpus,
         "PYTHONPATH": str(HERE) + os.pathsep + os.environ.get("PYTHONPATH", ""),
     }
 
@@ -298,7 +310,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Launch SPLADE training job")
 
     parser.add_argument("--local", action="store_true", help="Run locally without SageMaker")
-    parser.add_argument("--data-dir", default="../data", help="Local data directory")
+    parser.add_argument("--no-truncate", action="store_true", help="Use full dataset in local mode (no truncation)")
+    parser.add_argument("--data-dir", default="data/esci", help="Local data directory (e.g., data/esci, data/fiqa)")
     parser.add_argument("--local-output", default="./local_model_output", help="Local output dir")
 
     # SageMaker args

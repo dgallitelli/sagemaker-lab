@@ -10,7 +10,7 @@ build/
 data/
 
 # Local training output
-local_model_output/
+local_model_output*/
 
 # AWS / SageMaker
 .aws/
