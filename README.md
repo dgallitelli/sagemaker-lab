@@ -6,17 +6,23 @@ Fine-tune a [SPLADE](https://arxiv.org/abs/2109.10086) sparse embedding model wi
 
 Validated end-to-end locally on FiQA (financial QA retrieval, 57K corpus). Local mode uses a 600-doc subset for fast iteration; the SageMaker job runs against the full corpus.
 
-| Metric | BM25 Baseline | SPLADE (local) | Delta |
+**FiQA** (`mteb/fiqa`) — financial question answering, 57,638-document corpus:
+
+| Metric | BM25 | SPLADE | Delta |
 |--------|:---:|:---:|:---:|
-| NDCG@10 | 0.159 | 0.592 | +272% |
-| Recall@100 | 0.359 | 0.946 | +163% |
-| MRR@10 | 0.199 | 0.644 | +224% |
+| NDCG@10 | 0.159 | 0.280 | +76% |
+| Recall@100 | 0.359 | 0.585 | +63% |
+| MRR@10 | 0.199 | 0.341 | +72% |
 
-> **Note:** Local-mode numbers use a 600-doc truncated corpus for pipeline validation. The SageMaker job (`ml.g5.12xlarge`) trains on all 14K pairs against the full 57K-doc corpus and produces production-quality results.
+**NFCorpus** (`mteb/nfcorpus`) — biomedical literature retrieval, 3,633-document corpus:
 
-ANCE hard negative mining shows progressive improvement across iterations:
-- After ANCE iter 1: NDCG@10 = 0.562
-- After ANCE iter 2: NDCG@10 = 0.592
+| Metric | BM25 | SPLADE | Delta |
+|--------|:---:|:---:|:---:|
+| NDCG@10 | 0.266 | 0.410 | +54% |
+| Recall@100 | 0.210 | 0.729 | +247% |
+| MRR@10 | 0.467 | 0.750 | +61% |
+
+Evaluated after 3 training phases (easy negatives → ANCE iter 1 → ANCE iter 2) on Apple Silicon MPS. The SageMaker job on `ml.g5.12xlarge` with full dataset and more epochs is expected to improve further.
 
 ## Architecture
 
