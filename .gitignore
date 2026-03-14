@@ -33,3 +33,6 @@ firebase-debug.log
 
 # Blog post (not for repo)
 aws_blog_post.md
+
+# ClearanceAI evaluation (contains references to private project)
+clearanceai-splade-eval/
