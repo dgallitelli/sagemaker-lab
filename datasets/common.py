@@ -81,10 +81,6 @@ def build_qrels(test_rows: List[Dict]) -> Dict[str, Dict[str, float]]:
 # BM25 evaluation
 # ---------------------------------------------------------------------------
 
-def tokenize(text: str) -> List[str]:
-    return text.lower().split()
-
-
 def build_product_text(product: Dict) -> str:
     parts = [
         product.get("title", ""),
@@ -99,52 +95,50 @@ def evaluate_bm25(
     test_rows: List[Dict],
     qrels: Dict[str, Dict[str, float]],
 ) -> Dict:
-    from rank_bm25 import BM25Okapi
+    import bm25s
     import numpy as np
 
     logger.info(f"Building BM25 index over {len(corpus)} products...")
     t0 = time.time()
     product_ids = [p["product_id"] for p in corpus]
     corpus_texts = [build_product_text(p) for p in corpus]
-    tokenized_corpus = [tokenize(t) for t in corpus_texts]
-    bm25 = BM25Okapi(tokenized_corpus)
+
+    tokenized_corpus = bm25s.tokenize(corpus_texts)
+    retriever = bm25s.BM25()
+    retriever.index(tokenized_corpus)
     logger.info(f"BM25 index built in {time.time() - t0:.1f}s")
 
-    query_map: Dict[str, str] = {}
+    # Build query list (only queries with qrels, deduplicated)
+    seen_qids = set()
+    query_ids, query_texts = [], []
     for row in test_rows:
-        query_map[row["query_id"]] = row["query"]
+        qid = row["query_id"]
+        if qid in qrels and qid not in seen_qids:
+            seen_qids.add(qid)
+            query_ids.append(qid)
+            query_texts.append(row["query"])
 
-    ndcg_scores, recall_scores, mrr_scores = [], [], []
-    total_queries = len(query_map)
+    total_queries = len(query_ids)
     logger.info(f"Evaluating BM25 on {total_queries} test queries...")
     t_eval = time.time()
 
-    for i, (qid, query_text) in enumerate(query_map.items()):
-        if qid not in qrels:
-            continue
-        tokens = tokenize(query_text)
-        scores = bm25.get_scores(tokens)
+    # Batch retrieve top-100 for all queries at once
+    tokenized_queries = bm25s.tokenize(query_texts)
+    results_arr, scores_arr = retriever.retrieve(tokenized_queries, k=100)
 
-        # Partial sort: O(n) argpartition for top-100 instead of O(n log n) full sort
-        top_k = min(100, len(scores))
-        top_indices = np.argpartition(-scores, top_k)[:top_k]
-        top_indices = top_indices[np.argsort(-scores[top_indices])]
-        ranked_pids = [product_ids[idx] for idx in top_indices]
-
+    ndcg_scores, recall_scores, mrr_scores = [], [], []
+    for i, qid in enumerate(query_ids):
+        ranked_pids = [product_ids[idx] for idx in results_arr[i]]
         query_qrels = qrels[qid]
         ndcg_scores.append(ndcg_at_k(ranked_pids, query_qrels, k=10))
         recall_scores.append(recall_at_k(ranked_pids, query_qrels, k=100))
         mrr_scores.append(mrr_at_k(ranked_pids, query_qrels, k=10))
 
-        if (i + 1) % 1000 == 0 or (i + 1) == total_queries:
-            elapsed = time.time() - t_eval
-            qps = (i + 1) / elapsed
-            eta = (total_queries - i - 1) / qps if qps > 0 else 0
-            logger.info(
-                f"BM25 progress: {i+1}/{total_queries} queries "
-                f"({100*(i+1)/total_queries:.1f}%) | "
-                f"{qps:.1f} q/s | ETA {eta/60:.1f}min"
-            )
+    elapsed = time.time() - t_eval
+    logger.info(
+        f"BM25 evaluation complete: {total_queries} queries in {elapsed:.1f}s "
+        f"({total_queries / elapsed:.1f} q/s)"
+    )
 
     results = {
         "ndcg@10":    float(np.mean(ndcg_scores)),
@@ -283,7 +277,7 @@ def prepare_and_save(
     # BM25 evaluation
     bm25_results = None
     if skip_bm25:
-        logger.info(f"Skipping BM25 baseline (corpus={len(corpus)} products — too large for rank_bm25)")
+        logger.info(f"Skipping BM25 baseline (corpus={len(corpus)} products)")
     else:
         logger.info("Running BM25 baseline evaluation...")
         bm25_results = evaluate_bm25(corpus, test_rows_raw, qrels)

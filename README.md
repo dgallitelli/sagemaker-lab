@@ -61,7 +61,7 @@ Key design choices:
 ```bash
 python3.13 -m venv .venv
 source .venv/bin/activate
-pip install sentence-transformers datasets rank-bm25 qdrant-client scipy numpy tqdm pyyaml boto3 accelerate
+pip install sentence-transformers datasets bm25s scipy numpy tqdm pyyaml boto3 accelerate
 ```
 
 ## Usage
