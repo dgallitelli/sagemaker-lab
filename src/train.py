@@ -323,6 +323,20 @@ def main() -> None:
             document_regularizer_weight=flops_weight,
         )
 
+    # ── Zero-shot baseline (before any training, model IS the base model) ───
+    eval_batch_size = hp.get("eval_batch_size", 64)
+    logger.info("=== ZERO-SHOT BASELINE ===")
+    zeroshot_evaluator = SpladeEvaluator(
+        bm25_baseline_path=str(BM25_BASELINE_PATH)
+        if BM25_BASELINE_PATH.exists()
+        else None
+    )
+    zeroshot_results = zeroshot_evaluator.evaluate(
+        model, corpus, test_queries, qrels, eval_batch_size=eval_batch_size
+    )
+    for metric, value in zeroshot_results.items():
+        log_metric(f"zeroshot/{metric}", value)
+
     # ── Phase 1: Initial training on easy negatives ──────────────────────────
     logger.info("=== PHASE 1: Initial training (easy negatives) ===")
     train_dataset = build_hf_dataset(easy_pairs, corpus_map)
@@ -331,13 +345,13 @@ def main() -> None:
     eval_results_per_phase = []
 
     # ── P0: Evaluate after Phase 1 ──────────────────────────────────────────
-    eval_batch_size = hp.get("eval_batch_size", 64)
     logger.info("Evaluating after Phase 1...")
     phase1_evaluator = SpladeEvaluator(
         bm25_baseline_path=str(BM25_BASELINE_PATH)
         if BM25_BASELINE_PATH.exists()
         else None
     )
+    phase1_evaluator.zeroshot_results = zeroshot_results
     phase1_results = phase1_evaluator.evaluate(
         model, corpus, test_queries, qrels, eval_batch_size=eval_batch_size
     )
@@ -383,7 +397,9 @@ def main() -> None:
         hard_neg_results = miner.mine(
             model, mining_queries, k=k_mining, n_hard=n_hard, batch_size=eval_batch_size
         )
-        miner.reset()
+        # Keep corpus matrix for eval reuse, reset after eval
+        ance_corpus_matrix = miner._corpus_matrix
+        ance_product_ids = miner._product_ids
 
         # {query_id: [neg_pid, ...]}
         hard_neg_map = {r["query_id"]: r["negative_ids"] for r in hard_neg_results}
@@ -402,16 +418,19 @@ def main() -> None:
             warmup_override=0.0,
         )
 
-        # Evaluate after each ANCE iteration
+        # Evaluate after each ANCE iteration (reuse corpus matrix from mining)
         logger.info(f"Evaluating after ANCE iteration {ance_iter}...")
         evaluator = SpladeEvaluator(
             bm25_baseline_path=str(BM25_BASELINE_PATH)
             if BM25_BASELINE_PATH.exists()
             else None
         )
+        evaluator.zeroshot_results = zeroshot_results
         iter_results = evaluator.evaluate(
-            model, corpus, test_queries, qrels, eval_batch_size=eval_batch_size
+            model, corpus, test_queries, qrels, eval_batch_size=eval_batch_size,
+            precomputed_corpus_matrix=ance_corpus_matrix,
         )
+        miner.reset()  # free memory after eval reuse
         eval_results_per_phase.append(iter_results)
 
         for metric, value in iter_results.items():
@@ -442,17 +461,7 @@ def main() -> None:
     final_evaluator = SpladeEvaluator(
         bm25_baseline_path=str(BM25_BASELINE_PATH) if BM25_BASELINE_PATH.exists() else None
     )
-
-    # Zero-shot baseline (base model, no fine-tuning) — establishes what
-    # SPLADE gives "for free" vs what our fine-tuning adds
-    logger.info("=== ZERO-SHOT BASELINE ===")
-    zeroshot_results = final_evaluator.evaluate_zeroshot(
-        corpus, test_queries, qrels,
-        base_model_name=base_model,
-        eval_batch_size=eval_batch_size,
-    )
-    for metric, value in zeroshot_results.items():
-        log_metric(f"zeroshot/{metric}", value)
+    final_evaluator.zeroshot_results = zeroshot_results
 
     # Fine-tuned model eval (prints 3-row comparison: BM25 | zero-shot | fine-tuned)
     final_results = final_evaluator.evaluate(

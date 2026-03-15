@@ -47,6 +47,7 @@ class SpladeEvaluator:
         qrels: Dict[str, Dict[str, float]],
         eval_batch_size: int = 64,
         show_progress: bool = True,
+        precomputed_corpus_matrix: Optional[csr_matrix] = None,
     ) -> Dict[str, float]:
         """
         Evaluate SPLADE model on test queries.
@@ -58,24 +59,28 @@ class SpladeEvaluator:
             qrels: Nested dict: {query_id: {product_id: relevance_score}}.
             eval_batch_size: Batch size for encoding.
             show_progress: Show tqdm progress bars.
+            precomputed_corpus_matrix: Optional pre-encoded corpus matrix to skip re-encoding.
 
         Returns:
             Dict with ndcg@10, recall@100, mrr@10 keys.
         """
         product_ids = [p["product_id"] for p in corpus]
-        product_id_to_idx = {pid: i for i, pid in enumerate(product_ids)}
 
-        # Encode corpus into sparse matrix [n_docs, vocab_size]
-        logger.info(f"Encoding {len(corpus)} corpus documents...")
-        corpus_texts = [_build_product_text(p) for p in corpus]
-        corpus_matrix = _encode_to_sparse_matrix(
-            model, corpus_texts, eval_batch_size, show_progress
-        )
-        logger.info(
-            f"Corpus encoded: shape={corpus_matrix.shape}, "
-            f"nnz={corpus_matrix.nnz}, "
-            f"sparsity={1 - corpus_matrix.nnz / (corpus_matrix.shape[0] * corpus_matrix.shape[1]):.4f}"
-        )
+        if precomputed_corpus_matrix is not None:
+            corpus_matrix = precomputed_corpus_matrix
+            logger.info(f"Using precomputed corpus matrix: shape={corpus_matrix.shape}, nnz={corpus_matrix.nnz}")
+        else:
+            # Encode corpus into sparse matrix [n_docs, vocab_size]
+            logger.info(f"Encoding {len(corpus)} corpus documents...")
+            corpus_texts = [_build_product_text(p) for p in corpus]
+            corpus_matrix = _encode_to_sparse_matrix(
+                model, corpus_texts, eval_batch_size, show_progress
+            )
+            logger.info(
+                f"Corpus encoded: shape={corpus_matrix.shape}, "
+                f"nnz={corpus_matrix.nnz}, "
+                f"sparsity={1 - corpus_matrix.nnz / (corpus_matrix.shape[0] * corpus_matrix.shape[1]):.4f}"
+            )
 
         # Encode queries
         logger.info(f"Encoding {len(test_queries)} test queries...")
@@ -291,14 +296,14 @@ def _encode_to_sparse_matrix(
 
     Using CSR for memory efficiency — SPLADE vocab_size ~30K but most values are 0.
     """
-    all_rows, all_cols, all_data = [], [], []
-    vocab_size: Optional[int] = None
+    from scipy.sparse import vstack as sparse_vstack
+
+    batches = []
 
     iterator = range(0, len(texts), batch_size)
     if show_progress:
         iterator = tqdm(iterator, desc="Encoding batches", unit="batch")
 
-    row_offset = 0
     for i in iterator:
         batch = texts[i : i + batch_size]
         result = model.encode(
@@ -307,23 +312,10 @@ def _encode_to_sparse_matrix(
             convert_to_sparse_tensor=False,
         )
         embeddings = result.cpu().numpy() if hasattr(result, "cpu") else result
+        # Vectorized: zero out negatives and convert entire batch to CSR at once
+        batches.append(csr_matrix(np.maximum(embeddings, 0), dtype=np.float32))
 
-        if vocab_size is None:
-            vocab_size = embeddings.shape[1]
-
-        for j, emb in enumerate(embeddings):
-            nonzero_idx = np.where(emb > 0)[0]
-            all_rows.extend([row_offset + j] * len(nonzero_idx))
-            all_cols.extend(nonzero_idx.tolist())
-            all_data.extend(emb[nonzero_idx].tolist())
-
-        row_offset += len(batch)
-
-    if vocab_size is None:
+    if not batches:
         raise RuntimeError("No texts were encoded")
 
-    return csr_matrix(
-        (all_data, (all_rows, all_cols)),
-        shape=(len(texts), vocab_size),
-        dtype=np.float32,
-    )
+    return sparse_vstack(batches, format="csr")
