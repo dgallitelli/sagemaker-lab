@@ -90,10 +90,14 @@ def main() -> None:
         "--max-pairs", type=int, default=None,
         help="Max training pairs (stratified subsample). None = use all.",
     )
+    parser.add_argument(
+        "--skip-bm25", action="store_true",
+        help="Skip BM25 baseline (too slow for >1M corpus).",
+    )
     args = parser.parse_args()
 
     train_rows, test_rows = load_esci(max_pairs=args.max_pairs)
-    prepare_and_save(train_rows, test_rows, Path(args.output_dir))
+    prepare_and_save(train_rows, test_rows, Path(args.output_dir), skip_bm25=args.skip_bm25)
 
 
 if __name__ == "__main__":

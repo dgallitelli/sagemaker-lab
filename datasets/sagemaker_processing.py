@@ -11,6 +11,9 @@ Usage:
   # ESCI 200K subsample:
   python datasets/sagemaker_processing.py --dataset esci --max-pairs 200000
 
+  # ESCI distributed across 5 instances:
+  python datasets/sagemaker_processing.py --dataset esci --distributed --instance-count 5
+
   # FiQA (small, ml.m5.xlarge is enough):
   python datasets/sagemaker_processing.py --dataset fiqa --instance-type ml.m5.xlarge
 
@@ -69,18 +72,34 @@ def run_processing_job(args: argparse.Namespace) -> str:
     logger.info(f"Container: {image_uri}")
     logger.info(f"Instance: {args.instance_type}")
 
-    # S3 output path
-    s3_prefix = f"splade-data/{args.dataset}"
+    # S3 output path — include suffix to avoid collisions
+    suffix = ""
+    if args.max_pairs:
+        suffix += f"-{args.max_pairs // 1000}k"
+    if getattr(args, "distributed", False):
+        suffix += "-distributed"
+    s3_prefix = f"splade-data/{args.dataset}{suffix}"
     s3_output = f"s3://{bucket}/{s3_prefix}"
     logger.info(f"S3 output: {s3_output}")
+
+    # Select script: distributed wrapper for multi-instance ESCI
+    if args.distributed:
+        script_name = "prepare_esci_distributed.py"
+    else:
+        script_name = DATASET_SCRIPTS[args.dataset]
 
     # Build command-line arguments for the prepare script
     script_args = ["--output-dir", "/opt/ml/processing/output"]
     if args.max_pairs:
         script_args.extend(["--max-pairs", str(args.max_pairs)])
+    if args.skip_bm25:
+        script_args.append("--skip-bm25")
+
+    instance_count = args.instance_count if args.distributed else 1
 
     if args.dry_run:
-        logger.info(f"DRY RUN — would run {DATASET_SCRIPTS[args.dataset]} with args: {script_args}")
+        logger.info(f"DRY RUN — would run {script_name} with args: {script_args}")
+        logger.info(f"Instances: {instance_count}x {args.instance_type}")
         logger.info(f"Output would go to: {s3_output}")
         return s3_output
 
@@ -88,19 +107,19 @@ def run_processing_job(args: argparse.Namespace) -> str:
         role=role,
         image_uri=image_uri,
         command=["python3"],
-        instance_count=1,
+        instance_count=instance_count,
         instance_type=args.instance_type,
         volume_size_in_gb=50,
-        max_runtime_in_seconds=7200,  # 2 hour max
+        max_runtime_in_seconds=args.max_runtime,
         base_job_name=f"splade-prep-{args.dataset}",
         sagemaker_session=session,
     )
 
-    logger.info(f"Submitting processing job for {args.dataset}...")
+    logger.info(f"Submitting processing job for {args.dataset} ({instance_count} instances)...")
     t0 = time.time()
 
     processor.run(
-        code=str(HERE / DATASET_SCRIPTS[args.dataset]),
+        code=str(HERE / script_name),
         source_dir=str(HERE),         # uploads common.py alongside the script
         requirements=str(HERE / "requirements.txt"),
         arguments=script_args,
@@ -157,9 +176,16 @@ def parse_args() -> argparse.Namespace:
         help="Processing instance type (defaults per dataset)",
     )
     parser.add_argument("--max-pairs", type=int, default=None, help="Max training pairs (ESCI only)")
+    parser.add_argument("--skip-bm25", action="store_true", help="Skip BM25 baseline (too slow for full ESCI corpus)")
+    parser.add_argument("--distributed", action="store_true", help="Use distributed multi-instance processing (ESCI only)")
+    parser.add_argument("--instance-count", type=int, default=5, help="Number of instances for distributed mode (default: 5)")
+    parser.add_argument("--max-runtime", type=int, default=7200, help="Max runtime in seconds (default: 7200 = 2h)")
     parser.add_argument("--role", help="IAM role ARN (defaults to SageMaker execution role)")
     parser.add_argument("--dry-run", action="store_true", help="Print config but don't submit")
     args = parser.parse_args()
+
+    if args.distributed and args.dataset != "esci":
+        parser.error("--distributed is only supported for ESCI dataset")
 
     if args.instance_type is None:
         args.instance_type = DEFAULT_INSTANCES[args.dataset]

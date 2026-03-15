@@ -37,10 +37,12 @@ def load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def flatten_hyperparameters(config: dict) -> dict:
+def flatten_hyperparameters(config: dict, exclude_sections: tuple = ("local",)) -> dict:
     """Flatten nested config.yaml into a flat dict for SageMaker."""
     hp = {}
     for section, values in config.items():
+        if section in exclude_sections:
+            continue
         if isinstance(values, dict):
             hp.update(values)
     # SageMaker accepts only str/int/float/bool values
@@ -165,7 +167,7 @@ def _get_sagemaker_role() -> str:
 def run_sagemaker(args: argparse.Namespace, config: dict) -> None:
     """Submit a SageMaker training job using SDK v3."""
     from sagemaker.train.model_trainer import ModelTrainer
-    from sagemaker.train.configs import InputData, Compute, SourceCode, OutputDataConfig
+    from sagemaker.train.configs import InputData, Compute, SourceCode, OutputDataConfig, StoppingCondition
     from sagemaker.core.helper.session_helper import Session, get_execution_role
     from sagemaker.core.image_uris import retrieve
 
@@ -190,16 +192,16 @@ def run_sagemaker(args: argparse.Namespace, config: dict) -> None:
         image_uri = retrieve(
             framework="pytorch",
             region=region,
-            version="2.2.0",
-            py_version="py310",
-            instance_type="ml.g5.12xlarge",
+            version="2.6.0",
+            py_version="py312",
+            instance_type=args.instance_type,
             image_scope="training",
         )
     except Exception:
         # Fallback to known-good URI if retrieve() fails
         image_uri = (
             f"763104351884.dkr.ecr.{region}.amazonaws.com/"
-            "pytorch-training:2.2.0-gpu-py310-cu118-ubuntu20.04-sagemaker"
+            "pytorch-training:2.6.0-gpu-py312-cu124-ubuntu22.04-sagemaker"
         )
     logger.info(f"Training image: {image_uri}")
 
@@ -241,7 +243,7 @@ def run_sagemaker(args: argparse.Namespace, config: dict) -> None:
             requirements="requirements.txt",
         ),
         compute=Compute(
-            instance_type="ml.g5.12xlarge",
+            instance_type=args.instance_type,
             instance_count=1,
             volume_size_in_gb=100,
         ),
@@ -249,8 +251,8 @@ def run_sagemaker(args: argparse.Namespace, config: dict) -> None:
             s3_output_path=s3_output_uri
         ),
         hyperparameters=hp,
-        metric_definitions=metric_definitions,
-        base_job_name="splade-esci",
+        stopping_condition=StoppingCondition(max_runtime_in_seconds=43200),  # 12 hours
+        base_job_name=args.base_job_name,
         sagemaker_session=session,
     )
 
@@ -319,6 +321,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-prefix", default="splade-esci/data", help="S3 prefix for training data")
     parser.add_argument("--role", help="IAM role ARN (defaults to execution role)")
     parser.add_argument("--skip-upload", action="store_true", help="Skip data upload to S3")
+    parser.add_argument("--base-job-name", default="splade-esci", help="Base job name prefix")
+    parser.add_argument("--instance-type", default="ml.g5.12xlarge", help="Training instance type")
     parser.add_argument("--dry-run", action="store_true", help="Print config but don't submit job")
 
     return parser.parse_args()

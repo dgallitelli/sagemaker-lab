@@ -173,10 +173,17 @@ def build_hf_dataset(
         # Add hard negative if available for this query
         if hard_negatives_map:
             neg_ids = hard_negatives_map.get(pair["query_id"], [])
-            if neg_ids:
-                neg_product = corpus_map.get(neg_ids[0])
+            neg_text = None
+            for nid in neg_ids:
+                neg_product = corpus_map.get(nid)
                 if neg_product:
-                    entry["negative"] = _build_product_text(neg_product)
+                    neg_text = _build_product_text(neg_product)
+                    if neg_text:
+                        break
+            if neg_text:
+                entry["negative"] = neg_text
+            else:
+                continue  # skip pairs without hard negatives to keep columns consistent
 
         rows.append(entry)
 
@@ -219,16 +226,18 @@ def run_training_phase(
     output_dir: Path,
     hp: Dict,
     phase_name: str,
+    batch_size_override: Optional[int] = None,
 ) -> None:
     """Run one training phase with SparseEncoderTrainer."""
     from sentence_transformers.sparse_encoder.trainer import SparseEncoderTrainer
     from sentence_transformers.sparse_encoder.training_args import SparseEncoderTrainingArguments
 
+    batch_size = batch_size_override or hp.get("batch_size", 32)
     phase_dir = output_dir / phase_name
     args = SparseEncoderTrainingArguments(
         output_dir=str(phase_dir),
         num_train_epochs=1,
-        per_device_train_batch_size=hp.get("batch_size", 32),
+        per_device_train_batch_size=batch_size,
         learning_rate=float(hp.get("learning_rate", 2e-5)),
         warmup_steps=float(hp.get("warmup_ratio", 0.1)),  # float = warmup ratio in Transformers v5+
         fp16=torch.cuda.is_available(),
@@ -355,10 +364,12 @@ def main() -> None:
             f"hard negatives mined across {len(hard_neg_map)} queries"
         )
 
-        # Retrain with hard negatives
+        # Retrain with hard negatives (smaller batch to avoid OOM from triplet gather)
+        ance_batch_size = hp.get("ance_batch_size", hp.get("batch_size", 32))
         ance_dataset = build_hf_dataset(easy_pairs, corpus_map, hard_negatives_map=hard_neg_map)
         run_training_phase(
-            model, ance_dataset, make_loss(model), MODEL_DIR, hp, f"phase_ance{ance_iter}"
+            model, ance_dataset, make_loss(model), MODEL_DIR, hp, f"phase_ance{ance_iter}",
+            batch_size_override=ance_batch_size,
         )
 
         # Evaluate after each ANCE iteration

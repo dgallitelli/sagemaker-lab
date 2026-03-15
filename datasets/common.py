@@ -115,9 +115,11 @@ def evaluate_bm25(
         query_map[row["query_id"]] = row["query"]
 
     ndcg_scores, recall_scores, mrr_scores = [], [], []
-    logger.info(f"Evaluating BM25 on {len(query_map)} test queries...")
+    total_queries = len(query_map)
+    logger.info(f"Evaluating BM25 on {total_queries} test queries...")
+    t_eval = time.time()
 
-    for qid, query_text in query_map.items():
+    for i, (qid, query_text) in enumerate(query_map.items()):
         if qid not in qrels:
             continue
         tokens = tokenize(query_text)
@@ -129,6 +131,16 @@ def evaluate_bm25(
         ndcg_scores.append(ndcg_at_k(ranked_pids, query_qrels, k=10))
         recall_scores.append(recall_at_k(ranked_pids, query_qrels, k=100))
         mrr_scores.append(mrr_at_k(ranked_pids, query_qrels, k=10))
+
+        if (i + 1) % 1000 == 0 or (i + 1) == total_queries:
+            elapsed = time.time() - t_eval
+            qps = (i + 1) / elapsed
+            eta = (total_queries - i - 1) / qps if qps > 0 else 0
+            logger.info(
+                f"BM25 progress: {i+1}/{total_queries} queries "
+                f"({100*(i+1)/total_queries:.1f}%) | "
+                f"{qps:.1f} q/s | ETA {eta/60:.1f}min"
+            )
 
     results = {
         "ndcg@10":    float(np.mean(ndcg_scores)),
@@ -200,6 +212,7 @@ def prepare_and_save(
     output_dir: Path,
     extra_corpus_rows: Optional[List[Dict]] = None,
     full_corpus_loader=None,
+    skip_bm25: bool = False,
 ) -> None:
     """
     Shared pipeline: build splits, extend corpus, compute BM25, save outputs.
@@ -264,20 +277,26 @@ def prepare_and_save(
     }
 
     # BM25 evaluation
-    logger.info("Running BM25 baseline evaluation...")
-    bm25_results = evaluate_bm25(corpus, test_rows_raw, qrels)
-    logger.info(f"BM25 baseline: {bm25_results}")
+    bm25_results = None
+    if skip_bm25:
+        logger.info(f"Skipping BM25 baseline (corpus={len(corpus)} products — too large for rank_bm25)")
+    else:
+        logger.info("Running BM25 baseline evaluation...")
+        bm25_results = evaluate_bm25(corpus, test_rows_raw, qrels)
+        logger.info(f"BM25 baseline: {bm25_results}")
 
     # Save outputs
     write_jsonl(output_dir / "train.jsonl", train_pairs)
     write_jsonl(output_dir / "test.jsonl", test_pairs)
     write_jsonl(output_dir / "corpus.jsonl", corpus)
 
-    with open(output_dir / "bm25_baseline_results.json", "w") as f:
-        json.dump(bm25_results, f, indent=2)
-    logger.info(f"BM25 baseline saved to {output_dir / 'bm25_baseline_results.json'}")
+    if bm25_results:
+        with open(output_dir / "bm25_baseline_results.json", "w") as f:
+            json.dump(bm25_results, f, indent=2)
+        logger.info(f"BM25 baseline saved to {output_dir / 'bm25_baseline_results.json'}")
 
     with open(output_dir / "dataset_stats.json", "w") as f:
         json.dump(dataset_stats, f, indent=2)
 
-    print_summary_table(bm25_results, dataset_stats)
+    if bm25_results:
+        print_summary_table(bm25_results, dataset_stats)
