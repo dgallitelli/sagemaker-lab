@@ -6,9 +6,10 @@ training:
   batch_size: 32
   ance_batch_size: 16       # smaller batch for ANCE phases (triplets use more VRAM)
   learning_rate: 2e-5
+  ance_learning_rate: 1e-5  # lower LR for ANCE phases (hard neg gradients are larger)
   warmup_ratio: 0.1
   flops_weight: 4e-4       # SPLADE FLOPS regularization — controls sparsity
-  ance_iterations: 2
+  ance_iterations: 1        # 1 iteration sufficient for small datasets; 2 can regress
   hard_negatives_per_query: 5
   top_k_mining: 50
 

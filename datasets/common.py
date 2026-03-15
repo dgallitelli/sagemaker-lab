@@ -124,8 +124,12 @@ def evaluate_bm25(
             continue
         tokens = tokenize(query_text)
         scores = bm25.get_scores(tokens)
-        ranked_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
-        ranked_pids = [product_ids[i] for i in ranked_indices]
+
+        # Partial sort: O(n) argpartition for top-100 instead of O(n log n) full sort
+        top_k = min(100, len(scores))
+        top_indices = np.argpartition(-scores, top_k)[:top_k]
+        top_indices = top_indices[np.argsort(-scores[top_indices])]
+        ranked_pids = [product_ids[idx] for idx in top_indices]
 
         query_qrels = qrels[qid]
         ndcg_scores.append(ndcg_at_k(ranked_pids, query_qrels, k=10))

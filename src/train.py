@@ -17,6 +17,7 @@ import json
 import logging
 import math
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -227,19 +228,23 @@ def run_training_phase(
     hp: Dict,
     phase_name: str,
     batch_size_override: Optional[int] = None,
+    learning_rate_override: Optional[float] = None,
+    warmup_override: Optional[float] = None,
 ) -> None:
     """Run one training phase with SparseEncoderTrainer."""
     from sentence_transformers.sparse_encoder.trainer import SparseEncoderTrainer
     from sentence_transformers.sparse_encoder.training_args import SparseEncoderTrainingArguments
 
     batch_size = batch_size_override or hp.get("batch_size", 32)
+    lr = learning_rate_override or float(hp.get("learning_rate", 2e-5))
+    warmup = warmup_override if warmup_override is not None else float(hp.get("warmup_ratio", 0.1))
     phase_dir = output_dir / phase_name
     args = SparseEncoderTrainingArguments(
         output_dir=str(phase_dir),
         num_train_epochs=1,
         per_device_train_batch_size=batch_size,
-        learning_rate=float(hp.get("learning_rate", 2e-5)),
-        warmup_steps=float(hp.get("warmup_ratio", 0.1)),  # float = warmup ratio in Transformers v5+
+        learning_rate=lr,
+        warmup_steps=warmup,  # float = warmup ratio in Transformers v5+
         fp16=torch.cuda.is_available(),
         dataloader_num_workers=0,  # 0 avoids fork issues on macOS
         logging_steps=50,
@@ -325,11 +330,34 @@ def main() -> None:
 
     eval_results_per_phase = []
 
+    # ── P0: Evaluate after Phase 1 ──────────────────────────────────────────
+    eval_batch_size = hp.get("eval_batch_size", 64)
+    logger.info("Evaluating after Phase 1...")
+    phase1_evaluator = SpladeEvaluator(
+        bm25_baseline_path=str(BM25_BASELINE_PATH)
+        if BM25_BASELINE_PATH.exists()
+        else None
+    )
+    phase1_results = phase1_evaluator.evaluate(
+        model, corpus, test_queries, qrels, eval_batch_size=eval_batch_size
+    )
+    eval_results_per_phase.append(phase1_results)
+    for metric, value in phase1_results.items():
+        log_metric(f"phase1/{metric}", value, step=0)
+
+    # ── P1: Best-model selection — save Phase 1 as initial best ─────────────
+    best_ndcg = phase1_results.get("ndcg@10", 0.0)
+    best_phase = "phase1_easy"
+    best_model_dir = MODEL_DIR / "_best_checkpoint"
+    best_model_dir.mkdir(parents=True, exist_ok=True)
+    model.save(str(best_model_dir))
+    logger.info(f"Best model checkpoint: {best_phase} (NDCG@10={best_ndcg:.4f})")
+
     # ── ANCE iterations ──────────────────────────────────────────────────────
-    ance_iters = hp.get("ance_iterations", 2)
+    ance_iters = hp.get("ance_iterations", 1)
     k_mining = hp.get("top_k_mining", 50)
     n_hard = hp.get("hard_negatives_per_query", 5)
-    eval_batch_size = hp.get("eval_batch_size", 64)
+    ance_lr = float(hp.get("ance_learning_rate", hp.get("learning_rate", 2e-5)))
     miner = ANCEMiner()
 
     # Build query structs for mining (unique queries with their positive IDs)
@@ -364,12 +392,14 @@ def main() -> None:
             f"hard negatives mined across {len(hard_neg_map)} queries"
         )
 
-        # Retrain with hard negatives (smaller batch to avoid OOM from triplet gather)
+        # P2: Lower LR for ANCE, P4: No warmup on continuation phases
         ance_batch_size = hp.get("ance_batch_size", hp.get("batch_size", 32))
         ance_dataset = build_hf_dataset(easy_pairs, corpus_map, hard_negatives_map=hard_neg_map)
         run_training_phase(
             model, ance_dataset, make_loss(model), MODEL_DIR, hp, f"phase_ance{ance_iter}",
             batch_size_override=ance_batch_size,
+            learning_rate_override=ance_lr,
+            warmup_override=0.0,
         )
 
         # Evaluate after each ANCE iteration
@@ -386,6 +416,26 @@ def main() -> None:
 
         for metric, value in iter_results.items():
             log_metric(f"ance_iter{ance_iter}/{metric}", value, step=ance_iter)
+
+        # P1: Update best model if this ANCE iteration improved
+        iter_ndcg = iter_results.get("ndcg@10", 0.0)
+        if iter_ndcg > best_ndcg:
+            best_ndcg = iter_ndcg
+            best_phase = f"phase_ance{ance_iter}"
+            model.save(str(best_model_dir))
+            logger.info(f"New best model: {best_phase} (NDCG@10={best_ndcg:.4f})")
+        else:
+            logger.info(
+                f"ANCE iter {ance_iter} did not improve (NDCG@10={iter_ndcg:.4f} "
+                f"vs best={best_ndcg:.4f} from {best_phase}). Keeping best checkpoint."
+            )
+
+    # ── P1: Restore best checkpoint if last phase wasn't the best ───────────
+    last_phase = f"phase_ance{ance_iters}" if ance_iters > 0 else "phase1_easy"
+    if best_phase != last_phase:
+        logger.info(f"Restoring best model from {best_phase} (NDCG@10={best_ndcg:.4f})")
+        model = SparseEncoder(str(best_model_dir))
+        model.max_seq_length = max_seq_len
 
     # ── Final evaluation ─────────────────────────────────────────────────────
     logger.info("=== FINAL EVALUATION ===")
@@ -413,7 +463,7 @@ def main() -> None:
         log_metric(f"final/{metric}", value)
 
     # ── Save model ───────────────────────────────────────────────────────────
-    logger.info(f"Saving final model to {MODEL_DIR}...")
+    logger.info(f"Saving best model ({best_phase}) to {MODEL_DIR}...")
     model.save(str(MODEL_DIR))
 
     metrics_path = MODEL_DIR / "eval_metrics.json"
@@ -422,14 +472,19 @@ def main() -> None:
             {
                 "final": final_results,
                 "zeroshot": zeroshot_results,
-                "per_ance_iter": eval_results_per_phase,
+                "best_phase": best_phase,
+                "per_phase": eval_results_per_phase,
                 "hyperparameters": hp,
             },
             f,
             indent=2,
         )
+    # Clean up temporary best checkpoint
+    if best_model_dir.exists():
+        shutil.rmtree(best_model_dir)
+
     logger.info(f"Metrics saved to {metrics_path}")
-    logger.info("Training complete.")
+    logger.info(f"Training complete. Best phase: {best_phase} (NDCG@10={best_ndcg:.4f})")
 
 
 if __name__ == "__main__":

@@ -101,9 +101,11 @@ class SpladeEvaluator:
             # Dot product: query (1, vocab) @ corpus.T (vocab, n_docs) → (n_docs,)
             scores = corpus_matrix.dot(query_matrix[i].T).toarray().flatten()
 
-            # Rank documents by score descending
-            ranked_indices = np.argsort(scores)[::-1]
-            ranked_pids = [product_ids[idx] for idx in ranked_indices]
+            # Partial sort: top-100 via argpartition O(n) instead of full argsort O(n log n)
+            top_k = min(100, len(scores))
+            top_indices = np.argpartition(-scores, top_k)[:top_k]
+            top_indices = top_indices[np.argsort(-scores[top_indices])]
+            ranked_pids = [product_ids[idx] for idx in top_indices]
 
             query_qrels = qrels[qid]
             ndcg_scores.append(ndcg_at_k(ranked_pids, query_qrels, k=10))
@@ -158,8 +160,10 @@ class SpladeEvaluator:
             if qid not in qrels or not qrels[qid]:
                 continue
             scores = corpus_matrix.dot(query_matrix[i].T).toarray().flatten()
-            ranked_indices = np.argsort(scores)[::-1]
-            ranked_pids = [product_ids[idx] for idx in ranked_indices]
+            top_k = min(100, len(scores))
+            top_indices = np.argpartition(-scores, top_k)[:top_k]
+            top_indices = top_indices[np.argsort(-scores[top_indices])]
+            ranked_pids = [product_ids[idx] for idx in top_indices]
             query_qrels = qrels[qid]
             ndcg_scores.append(ndcg_at_k(ranked_pids, query_qrels, k=10))
             recall_scores.append(recall_at_k(ranked_pids, query_qrels, k=100))
