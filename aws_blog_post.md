@@ -58,55 +58,55 @@ This mechanism proved critical. On smaller datasets, ANCE hard negative mining c
 
 ## Results
 
-Each experiment trains and evaluates **in-domain**: the model is fine-tuned on each dataset's training split and evaluated on its test split against the full corpus. Every results table includes three rows: BM25 (traditional lexical matching), SPLADE zero-shot (base model with no fine-tuning), and SPLADE fine-tuned (after our two-phase pipeline with best-model selection). The "vs. Zero-shot" delta isolates the improvement from our fine-tuning pipeline, separate from SPLADE's pretrained [MS MARCO](https://microsoft.github.io/msmarco/) knowledge.
+Each experiment trains and evaluates **in-domain**: the model is fine-tuned on each dataset's training split and evaluated on its test split against the full corpus. Every results table includes four rows: BM25 (traditional lexical matching), [BGE-large-en-v1.5](https://huggingface.co/BAAI/bge-large-en-v1.5) (a strong dense embedding baseline), SPLADE zero-shot (base model with no fine-tuning), and SPLADE fine-tuned (after our two-phase pipeline with best-model selection). The "vs. Zero-shot" delta isolates the improvement from our fine-tuning pipeline, separate from SPLADE's pretrained [MS MARCO](https://microsoft.github.io/msmarco/) knowledge.
 
 ### Amazon ESCI: E-commerce Product Search
 
 200K stratified subsample from the [Amazon ESCI dataset](https://github.com/amazon-science/esci-data) (~1.4M US English query-product pairs). 4-level graded relevance (Exact, Substitute, Complement, Irrelevant). 22,458 test queries against a 503,839-document corpus — our largest and most statistically robust evaluation.
 
 ```
-+-----------------------------------------------------------------------+
-| Metric     | BM25   | Zero-shot | Fine-tuned | vs Zero-shot | vs BM25 |
-|------------|--------|-----------|------------|--------------|---------|
-| NDCG@10    |    TBD |       TBD |        TBD |          TBD |     TBD |
-| Recall@100 |    TBD |       TBD |        TBD |          TBD |     TBD |
-| MRR@10     |    TBD |       TBD |        TBD |          TBD |     TBD |
-+-----------------------------------------------------------------------+
++--------------------------------------------------------------------------------+
+| Metric     | BM25   | BGE-large | Zero-shot | Fine-tuned | vs ZS    | vs BM25  |
+|------------|--------|-----------|-----------|------------|----------|----------|
+| NDCG@10    | 0.3766 |    0.4412 |       TBD |        TBD |      TBD |      TBD |
+| Recall@100 | 0.5353 |    0.6253 |       TBD |        TBD |      TBD |      TBD |
+| MRR@10     | 0.5863 |    0.6543 |       TBD |        TBD |      TBD |      TBD |
++--------------------------------------------------------------------------------+
 ```
 
-*ESCI results pending — training job in progress.*
+*ESCI SPLADE results pending — training job in progress.*
 
 ### FiQA: Financial Question Answering
 
 14,166 training pairs, 648 test queries, 57,638-document corpus. Binary relevance. Natural language questions matched against financial answers and forum posts.
 
 ```
-+-----------------------------------------------------------------------+
-| Metric     | BM25   | Zero-shot | Fine-tuned | vs Zero-shot | vs BM25 |
-|------------|--------|-----------|------------|--------------|---------|
-| NDCG@10    | 0.1591 |    0.3559 |     0.3649 |        +2.5% |  +129%  |
-| Recall@100 | 0.3590 |    0.6363 |     0.6936 |        +9.0% |   +93%  |
-| MRR@10     | 0.1985 |    0.4264 |     0.4423 |        +3.7% |  +123%  |
-+-----------------------------------------------------------------------+
++--------------------------------------------------------------------------------+
+| Metric     | BM25   | BGE-large | Zero-shot | Fine-tuned | vs ZS    | vs BM25  |
+|------------|--------|-----------|-----------|------------|----------|----------|
+| NDCG@10    | 0.1591 |  0.4501 ◄ |    0.3559 |     0.3649 |    +2.5% |   +129%  |
+| Recall@100 | 0.3590 |  0.7697 ◄ |    0.6363 |     0.6936 |    +9.0% |    +93%  |
+| MRR@10     | 0.1985 |  0.5343 ◄ |    0.4264 |     0.4423 |    +3.7% |   +123%  |
++--------------------------------------------------------------------------------+
 ```
 
-FiQA demonstrates the value of fine-tuning over zero-shot across all metrics. The fine-tuned model was selected from Phase 1 (in-batch contrastive learning); ANCE hard negative mining regressed on this dataset (NDCG dropped from 0.3644 to 0.2696), and best-model selection correctly preserved the stronger Phase 1 checkpoint. This pattern — Phase 1 helps, ANCE hurts — is characteristic of smaller datasets where hard negative mining surfaces false negatives from the unlabeled corpus.
+Fine-tuning improves over zero-shot SPLADE across all metrics, with Phase 1 selected as the best checkpoint after ANCE regression (NDCG dropped from 0.3644 to 0.2696). This pattern — Phase 1 helps, ANCE hurts — is characteristic of smaller datasets where hard negative mining surfaces false negatives from the unlabeled corpus. BGE-large outperforms SPLADE here: financial QA involves matching natural language questions to semantically similar answers with low vocabulary overlap, which favors dense embeddings.
 
 ### NFCorpus: Biomedical Literature Retrieval
 
 110,575 training pairs, 323 test queries, 3,633-document corpus. Graded relevance (0/1/2). Specialized medical vocabulary with high positive density (~42 relevant documents per query).
 
 ```
-+-----------------------------------------------------------------------+
-| Metric     | BM25   | Zero-shot | Fine-tuned | vs Zero-shot | vs BM25 |
-|------------|--------|-----------|------------|--------------|---------|
-| NDCG@10    | 0.2665 |    0.3527 |        TBD |          TBD |     TBD |
-| Recall@100 | 0.2105 |    0.2891 |        TBD |          TBD |     TBD |
-| MRR@10     | 0.4669 |    0.5691 |        TBD |          TBD |     TBD |
-+-----------------------------------------------------------------------+
++--------------------------------------------------------------------------------+
+| Metric     | BM25   | BGE-large | Zero-shot | Fine-tuned | vs ZS    | vs BM25  |
+|------------|--------|-----------|-----------|------------|----------|----------|
+| NDCG@10    | 0.2665 |  0.3820 ◄ |    0.3481 |     0.3678 |    +5.7% |    +38%  |
+| Recall@100 | 0.2105 |    0.3639 |    0.2843 |  0.4160 ◄  |   +46.3% |    +98%  |
+| MRR@10     | 0.4669 |  0.5759 ◄ |    0.5751 |     0.5558 |    -3.4% |    +19%  |
++--------------------------------------------------------------------------------+
 ```
 
-*NFCorpus fine-tuned results pending — retraining with best-model selection.*
+NFCorpus reveals the complementary strengths of sparse and dense retrieval. BGE-large wins NDCG@10 and MRR@10 — it ranks the most relevant biomedical documents higher. But fine-tuned SPLADE wins Recall@100 decisively (0.4160 vs. 0.3639), surfacing 14% more relevant documents in the top 100 through learned term expansion of medical synonyms, abbreviations, and related concepts. For RAG pipelines that feed retrieved documents to a reranker or LLM, this recall advantage is more valuable than top-10 precision. As with FiQA, best-model selection preserved the Phase 1 checkpoint after ANCE regression.
 
 ### How to Read These Results
 
@@ -114,9 +114,15 @@ FiQA demonstrates the value of fine-tuning over zero-shot across all metrics. Th
 - **NDCG@10** measures ranking quality in the top 10 results where user attention concentrates — the primary metric for production search. **Recall@100** measures how many relevant documents appear in the top 100 — the primary metric for RAG pipelines where a downstream reranker or LLM processes retrieved candidates.
 - Hyperparameters were held constant across all three datasets and not tuned per-domain. Results reflect pipeline generalization, not per-dataset optimization.
 
-### Why No Dense Embedding Baseline?
+### SPLADE vs. Dense Embeddings
 
-Our experiments compare against BM25 and zero-shot SPLADE, not against dense embedding models (e.g., BGE, GTE, Voyage). SPLADE's value proposition is architectural: sparse vectors slot into existing inverted index infrastructure, activations are interpretable, and lexical precision is preserved by design. For readers interested in how dense models compare on these datasets, the [BEIR benchmark](https://arxiv.org/abs/2104.08663) and [MTEB leaderboard](https://huggingface.co/spaces/mteb/leaderboard) provide cross-model comparisons on standardized splits.
+We include [BGE-large-en-v1.5](https://huggingface.co/BAAI/bge-large-en-v1.5) (1024-dim dense embeddings) as a strong dense baseline. BGE-large is a top-performing open-source dense retriever — comparable to the models you would realistically deploy in production.
+
+On FiQA, BGE-large dominates all metrics. Dense embeddings excel at matching natural language questions to semantically similar answers, where vocabulary overlap is low and meaning-level matching is essential. SPLADE's term expansion helps (zero-shot already beats BM25 by 2x), but BGE's continuous vector space captures financial question-answer semantics more effectively than discrete token activations.
+
+On NFCorpus, the picture is more nuanced. BGE-large wins NDCG@10 and MRR@10 — it ranks relevant biomedical documents higher in the top 10. But fine-tuned SPLADE wins Recall@100 by a wide margin (0.4160 vs. 0.3639, +14.3%). SPLADE's learned term expansion surfaces more relevant documents from the long tail of medical terminology, even if it does not always rank them as precisely. For RAG pipelines, where a downstream reranker processes the top 100, this recall advantage matters more than top-10 ranking.
+
+The takeaway: SPLADE is not universally better or worse than dense embeddings. It offers a different tradeoff — interpretable activations, inverted index compatibility, and strong recall from term expansion, at the cost of lower precision on some tasks. Choose based on your infrastructure constraints and whether your use case rewards precision (dense) or recall and interpretability (sparse).
 
 ## When NOT to Use SPLADE
 
@@ -245,7 +251,7 @@ predictor.delete_endpoint()
 
 **E-commerce product search** is the primary use case. Pre-encode your product catalog offline as sparse vectors and store them in an inverted index ([Amazon OpenSearch Service](https://docs.aws.amazon.com/opensearch-service/latest/developerguide/what-is.html), Elasticsearch with `sparse_vector` field type, or Qdrant). At query time, encode the user query via the SageMaker endpoint and retrieve against the index. Our ESCI experiments validate this pattern directly. For latency-sensitive applications, export the model for local inference using ONNX or the sentence-transformers library.
 
-**Financial document retrieval** benefits from SPLADE's ability to bridge vocabulary between natural language questions ("What affects municipal bond yields?") and formal documents with precise terminology, while preserving exact matching on tickers, dates, and regulatory terms. Our FiQA results show +2.5% NDCG@10 over zero-shot SPLADE in this domain.
+**Financial document retrieval** benefits from SPLADE's ability to bridge vocabulary between natural language questions ("What affects municipal bond yields?") and formal documents with precise terminology, while preserving exact matching on tickers, dates, and regulatory terms. Note that dense models like BGE-large outperform SPLADE on financial QA where semantic matching dominates — consider a hybrid pipeline or dense retrieval if vocabulary overlap is low in your domain.
 
 **RAG retrieval** is a natural fit. Compared to dense embeddings, SPLADE provides more interpretable retrieval (you can inspect activated tokens to understand why a document was retrieved), better handling of domain-specific terminology, and native compatibility with keyword filters. For RAG applications over technical documentation, legal corpora, or product knowledge bases, fine-tuned SPLADE retrieval followed by LLM generation delivers more grounded responses.
 

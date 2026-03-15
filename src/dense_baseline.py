@@ -109,21 +109,34 @@ def build_doc_text(doc: Dict) -> str:
 # Dense encoding + evaluation
 # ---------------------------------------------------------------------------
 
-def encode_texts(model: SentenceTransformer, texts: List[str], batch_size: int = 64) -> np.ndarray:
+def encode_texts(
+    model: SentenceTransformer,
+    texts: List[str],
+    batch_size: int = 256,
+    pool=None,
+) -> np.ndarray:
     """Encode texts to dense vectors, normalized for cosine similarity."""
-    # BGE-large uses "Represent this sentence: " prefix for queries in some setups,
-    # but bge-large-en-v1.5 works well without it for retrieval. We use the
-    # instruction-based approach for queries as recommended by the model card.
-    embeddings = model.encode(
-        texts,
-        batch_size=batch_size,
-        show_progress_bar=True,
-        normalize_embeddings=True,
-    )
+    if pool is not None:
+        embeddings = model.encode_multi_process(
+            pool,
+            texts,
+            batch_size=batch_size,
+            normalize_embeddings=True,
+        )
+    else:
+        embeddings = model.encode(
+            texts,
+            batch_size=batch_size,
+            show_progress_bar=True,
+            normalize_embeddings=True,
+        )
+    # Cast to float32 for CPU matmul (fp16 has no SIMD benefit on x86)
+    if embeddings.dtype != np.float32:
+        embeddings = embeddings.astype(np.float32)
     return embeddings
 
 
-def evaluate_dataset(model: SentenceTransformer, data_dir: Path, dataset_name: str) -> Dict:
+def evaluate_dataset(model: SentenceTransformer, data_dir: Path, dataset_name: str, pool=None) -> Dict:
     """Evaluate BGE on a single dataset directory."""
     corpus_path = data_dir / "corpus.jsonl"
     test_path = data_dir / "test.jsonl"
@@ -155,15 +168,15 @@ def evaluate_dataset(model: SentenceTransformer, data_dir: Path, dataset_name: s
     t0 = time.time()
     logger.info(f"Encoding {len(corpus)} corpus documents with {MODEL_NAME}...")
     corpus_texts = [build_doc_text(doc) for doc in corpus]
-    corpus_embeddings = encode_texts(model, corpus_texts, batch_size=128)
+    corpus_embeddings = encode_texts(model, corpus_texts, batch_size=256, pool=pool)
     corpus_time = time.time() - t0
     logger.info(f"Corpus encoded in {corpus_time:.1f}s — shape: {corpus_embeddings.shape}")
 
-    # Encode queries (BGE recommends "Represent this sentence: " prefix for retrieval queries)
+    # BGE-large-en-v1.5 requires instruction prefix for queries (per model card)
     t0 = time.time()
     logger.info(f"Encoding {len(queries)} queries...")
-    query_texts = [q["query"] for q in queries]
-    query_embeddings = encode_texts(model, query_texts, batch_size=128)
+    query_texts = [f"Represent this sentence for searching relevant passages: {q['query']}" for q in queries]
+    query_embeddings = encode_texts(model, query_texts, batch_size=256, pool=pool)
     query_time = time.time() - t0
     logger.info(f"Queries encoded in {query_time:.1f}s — shape: {query_embeddings.shape}")
 
@@ -264,14 +277,31 @@ def main():
     logger.info(f"Loading {MODEL_NAME}...")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = SentenceTransformer(MODEL_NAME, device=device)
+    if device == "cuda":
+        model = model.half()
+        logger.info("Model converted to float16 for faster inference")
     logger.info(f"Model loaded on {device}, embedding dim={model.get_sentence_embedding_dimension()}")
+
+    # Process smallest datasets first so we get partial results even on timeout
+    size_order = {"nfcorpus": 0, "fiqa": 1, "esci": 2}
+    channels.sort(key=lambda c: size_order.get(c, 99))
+
+    # Multi-GPU encoding: start pool if multiple GPUs available
+    n_gpus = torch.cuda.device_count()
+    pool = None
+    if n_gpus > 1:
+        logger.info(f"Starting multi-process pool with {n_gpus} GPUs")
+        pool = model.start_multi_process_pool()
 
     all_results = {}
     for channel in channels:
         data_dir = sm_input / channel
-        results = evaluate_dataset(model, data_dir, channel)
+        results = evaluate_dataset(model, data_dir, channel, pool=pool)
         if results:
             all_results[channel] = results
+
+    if pool is not None:
+        model.stop_multi_process_pool(pool)
 
     # Save combined results
     results_path = output_dir / "dense_baseline_results.json"

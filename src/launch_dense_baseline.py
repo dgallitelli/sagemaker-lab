@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--instance-type", default="ml.g5.2xlarge")
+    parser.add_argument("--instance-type", default="ml.g5.12xlarge")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -108,7 +108,7 @@ def main():
         output_data_config=OutputDataConfig(
             s3_output_path=f"s3://{bucket}/dense-baseline-output/",
         ),
-        stopping_condition=StoppingCondition(max_runtime_in_seconds=7200),
+        stopping_condition=StoppingCondition(max_runtime_in_seconds=14400),
         base_job_name="dense-baseline",
         role=role,
         sagemaker_session=session,
