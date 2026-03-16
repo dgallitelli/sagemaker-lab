@@ -41,7 +41,7 @@ MODELS = {
     "cohere-v4": {
         "model_id": "cohere.embed-v4:0",
         "dimensions": 1024,
-        "batch_size": 96,  # supports batch
+        "batch_size": 96,  # supports batch but throttles aggressively
     },
 }
 
@@ -111,7 +111,8 @@ def load_test_queries(path: Path):
 
 def build_doc_text(doc):
     parts = [doc.get("title", ""), doc.get("description", ""), doc.get("bullet_points", "")]
-    return " ".join(p for p in parts if p).strip()
+    text = " ".join(p for p in parts if p).strip()
+    return text if text else "(empty)"
 
 
 # ---------------------------------------------------------------------------
@@ -130,15 +131,20 @@ def _invoke_titan(client, model_id, texts, dimensions):
     return [result["embedding"]]
 
 
-def _invoke_nova(client, model_id, texts, dimensions):
+def _invoke_nova(client, model_id, texts, dimensions, input_type="search_document"):
     """Encode a single text with Nova Multimodal Embeddings."""
+    purpose = "GENERIC_INDEX" if input_type == "search_document" else "TEXT_RETRIEVAL"
     body = json.dumps({
-        "inputText": texts[0],
-        "embeddingConfig": {"outputEmbeddingLength": dimensions},
+        "taskType": "SINGLE_EMBEDDING",
+        "singleEmbeddingParams": {
+            "embeddingPurpose": purpose,
+            "embeddingDimension": dimensions,
+            "text": {"truncationMode": "END", "value": texts[0]},
+        },
     })
     resp = client.invoke_model(modelId=model_id, body=body)
     result = json.loads(resp["body"].read())
-    return [result["embedding"]]
+    return [result["embeddings"][0]["embedding"]]
 
 
 def _invoke_cohere(client, model_id, texts, dimensions, input_type="search_document"):
@@ -179,18 +185,21 @@ def encode_bedrock(
     log_interval = max(1, len(batches) // 20)
 
     def _call(batch_idx, batch_texts):
-        for attempt in range(5):
+        max_retries = 10 if model_name == "cohere-v4" else 5
+        for attempt in range(max_retries):
             try:
                 if model_name == "titan-v2":
                     return batch_idx, _invoke_titan(client, model_id, batch_texts, dimensions)
                 elif model_name == "nova-multimodal":
-                    return batch_idx, _invoke_nova(client, model_id, batch_texts, dimensions)
+                    return batch_idx, _invoke_nova(client, model_id, batch_texts, dimensions, input_type)
                 elif model_name == "cohere-v4":
                     return batch_idx, _invoke_cohere(client, model_id, batch_texts, dimensions, input_type)
             except Exception as e:
                 err = str(e)
-                if "ThrottlingException" in err or "Too many requests" in err.lower():
-                    time.sleep(2 ** attempt)
+                if any(x in err for x in ["ThrottlingException", "ModelErrorException"]) or "Too many requests" in err.lower():
+                    backoff = min(2 ** attempt + 1, 60)
+                    logger.warning(f"  Retryable error (attempt {attempt+1}): {err[:80]}...")
+                    time.sleep(backoff)
                 else:
                     raise
         raise RuntimeError(f"Max retries for batch {batch_idx}")
@@ -223,8 +232,9 @@ def evaluate_model(client, model_name, corpus, queries, qrels, product_ids, bm25
     cfg = MODELS[model_name]
     dimensions = cfg["dimensions"]
 
-    # Cohere uses different workers (batched = fewer calls)
-    max_workers = 10 if model_name == "cohere-v4" else 30
+    # Cohere batches 96 texts/call but throttles aggressively — use sequential (1 worker)
+    # Nova/Titan are single-text calls, benefit from concurrency
+    max_workers = 1 if model_name == "cohere-v4" else 20
 
     # Encode corpus
     t0 = time.time()
