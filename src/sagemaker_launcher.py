@@ -187,7 +187,7 @@ def run_sagemaker(args: argparse.Namespace, config: dict) -> None:
     s3_training_uri = f"s3://{s3_bucket}/{data_prefix}"
     s3_output_uri = f"s3://{s3_bucket}/splade-training-output"
 
-    # ── PyTorch 2.2 GPU DLC ──────────────────────────────────────────────────
+    # ── PyTorch 2.6 GPU DLC ──────────────────────────────────────────────────
     try:
         image_uri = retrieve(
             framework="pytorch",

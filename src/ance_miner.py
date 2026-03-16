@@ -7,12 +7,13 @@ then extracts top-k hard negatives per query (excluding true positives).
 """
 
 import logging
+import time
 from typing import Dict, List, Optional, Set
 
 import numpy as np
 from sentence_transformers import SparseEncoder
 
-from evaluate import _encode_to_sparse_matrix
+from evaluate import _encode_to_sparse_matrix, _build_product_text
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +50,15 @@ class ANCEMiner:
 
         corpus_texts = [_build_product_text(p) for p in corpus]
         logger.info(f"Encoding {len(corpus_texts)} corpus documents for ANCE index...")
+        t0 = time.time()
         self._corpus_matrix = _encode_to_sparse_matrix(
             model, corpus_texts, batch_size=batch_size, show_progress=show_progress
         )
+        elapsed = time.time() - t0
+        docs_per_sec = len(corpus) / elapsed if elapsed > 0 else 0
         logger.info(
-            f"ANCE index built: {len(corpus)} documents indexed | "
-            f"matrix shape={self._corpus_matrix.shape}, nnz={self._corpus_matrix.nnz}"
+            f"ANCE index built in {elapsed:.1f}s ({docs_per_sec:.0f} docs/s): "
+            f"{len(corpus)} documents | matrix shape={self._corpus_matrix.shape}, nnz={self._corpus_matrix.nnz}"
         )
 
     def mine(
@@ -88,9 +92,11 @@ class ANCEMiner:
 
         query_texts = [q["query"] for q in queries]
         logger.info(f"Encoding {len(query_texts)} queries for hard negative mining...")
+        t0 = time.time()
         query_matrix = _encode_to_sparse_matrix(
             model, query_texts, batch_size=batch_size, show_progress=show_progress
         )
+        logger.info(f"Queries encoded in {time.time() - t0:.1f}s")
 
         results = []
         total_found = 0
@@ -176,11 +182,3 @@ class ANCEMiner:
         logger.info("ANCE index reset")
 
 
-def _build_product_text(product: Dict) -> str:
-    """Concatenate product fields into a single text for encoding."""
-    parts = [
-        product.get("title", ""),
-        product.get("description", ""),
-        product.get("bullet_points", ""),
-    ]
-    return " ".join(p for p in parts if p).strip()

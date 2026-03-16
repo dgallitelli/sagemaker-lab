@@ -1,0 +1,1 @@
+{"ndcg@10": 0.3766, "recall@100": 0.5353, "mrr@10": 0.5863, "num_queries": 22458, "corpus_size": 503839}

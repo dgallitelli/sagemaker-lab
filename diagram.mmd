@@ -1,0 +1,22 @@
+flowchart TB
+    subgraph SM["SageMaker Training Job — ml.g5.12xlarge"]
+        direction TB
+        DATA["Domain Data<br/>(S3 JSONL)"]
+        P1["Phase 1: In-Batch Negatives<br/>(contrastive learning, LR=2e-5)"]
+        EVAL1["Eval: NDCG@10<br/>(save checkpoint)"]
+        MINE["ANCE Miner<br/>(scipy sparse Q @ C.T)"]
+        P2["Phase 2: Hard Negatives<br/>(lower LR=1e-5)"]
+        EVAL2["Eval: NDCG@10,<br/>Recall@100, MRR@10"]
+        BEST["Best-Model Selection<br/>(keep best NDCG@10)"]
+
+        DATA --> P1 --> EVAL1 --> MINE --> P2 --> EVAL2 --> BEST
+    end
+
+    BEST --> MODEL["Model Artifact (S3)"]
+    BEST --> CW["CloudWatch Metrics"]
+    MODEL --> EP["SageMaker Endpoint<br/>(TEI + SPLADE pooling)"]
+
+    style SM fill:#232f3e,stroke:#ff9900,color:#fff
+    style MODEL fill:#3b48cc,stroke:#232f3e,color:#fff
+    style CW fill:#3b48cc,stroke:#232f3e,color:#fff
+    style EP fill:#ff9900,stroke:#232f3e,color:#fff

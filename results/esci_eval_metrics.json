@@ -1,0 +1,13 @@
+{
+  "final": {
+    "ndcg@10": 0.48860353167395976,
+    "recall@100": 0.6849305392086589,
+    "mrr@10": 0.6859759204836683
+  },
+  "zeroshot": {
+    "ndcg@10": 0.4625597999363119,
+    "recall@100": 0.6395701112752203,
+    "mrr@10": 0.6713299923525677
+  },
+  "source_model": "/opt/ml/input/data/model/extracted/_best_checkpoint"
+}

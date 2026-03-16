@@ -9,6 +9,7 @@ Loads BM25 baseline from bm25_baseline_results.json for comparison.
 import json
 import logging
 import math
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -72,55 +73,74 @@ class SpladeEvaluator:
         else:
             # Encode corpus into sparse matrix [n_docs, vocab_size]
             logger.info(f"Encoding {len(corpus)} corpus documents...")
+            t0 = time.time()
             corpus_texts = [_build_product_text(p) for p in corpus]
             corpus_matrix = _encode_to_sparse_matrix(
                 model, corpus_texts, eval_batch_size, show_progress
             )
+            elapsed = time.time() - t0
+            docs_per_sec = len(corpus) / elapsed if elapsed > 0 else 0
             logger.info(
-                f"Corpus encoded: shape={corpus_matrix.shape}, "
-                f"nnz={corpus_matrix.nnz}, "
+                f"Corpus encoded in {elapsed:.1f}s ({docs_per_sec:.0f} docs/s): "
+                f"shape={corpus_matrix.shape}, nnz={corpus_matrix.nnz}, "
                 f"sparsity={1 - corpus_matrix.nnz / (corpus_matrix.shape[0] * corpus_matrix.shape[1]):.4f}"
             )
 
         # Encode queries
         logger.info(f"Encoding {len(test_queries)} test queries...")
+        t0 = time.time()
         query_texts = [q["query"] for q in test_queries]
         query_matrix = _encode_to_sparse_matrix(
             model, query_texts, eval_batch_size, show_progress
         )
+        logger.info(f"Queries encoded in {time.time() - t0:.1f}s")
 
-        # Compute metrics per query
+        # Chunked batched scoring: matrix multiply in chunks to avoid OOM
+        # Full matmul (22K × 504K) would produce ~45 GB dense result
+        SCORE_CHUNK = 512
+        logger.info(f"Computing scores in chunks of {SCORE_CHUNK} queries...")
+        t0 = time.time()
+
         ndcg_scores, recall_scores, mrr_scores = [], [], []
+        corpus_matrix_T = corpus_matrix.T.tocsc()  # pre-transpose once
 
-        q_iterator = enumerate(test_queries)
-        if show_progress:
-            q_iterator = tqdm(
-                q_iterator, total=len(test_queries), desc="Evaluating queries"
-            )
+        n_queries = len(test_queries)
+        for chunk_start in tqdm(
+            range(0, n_queries, SCORE_CHUNK),
+            desc="Scoring chunks",
+            disable=not show_progress,
+        ):
+            chunk_end = min(chunk_start + SCORE_CHUNK, n_queries)
+            chunk_scores = query_matrix[chunk_start:chunk_end].dot(corpus_matrix_T)  # (chunk, n_docs)
 
-        for i, query in q_iterator:
-            qid = query["query_id"]
-            if qid not in qrels or not qrels[qid]:
-                continue
+            for local_i in range(chunk_end - chunk_start):
+                global_i = chunk_start + local_i
+                qid = test_queries[global_i]["query_id"]
+                if qid not in qrels or not qrels[qid]:
+                    continue
 
-            # Dot product: query (1, vocab) @ corpus.T (vocab, n_docs) → (n_docs,)
-            scores = corpus_matrix.dot(query_matrix[i].T).toarray().flatten()
+                scores = chunk_scores[local_i].toarray().flatten()
 
-            # Partial sort: top-100 via argpartition O(n) instead of full argsort O(n log n)
-            top_k = min(100, len(scores))
-            top_indices = np.argpartition(-scores, top_k)[:top_k]
-            top_indices = top_indices[np.argsort(-scores[top_indices])]
-            ranked_pids = [product_ids[idx] for idx in top_indices]
+                top_k = min(100, len(scores))
+                if top_k >= len(scores):
+                    top_indices = np.argsort(-scores)
+                else:
+                    top_indices = np.argpartition(-scores, top_k)[:top_k]
+                    top_indices = top_indices[np.argsort(-scores[top_indices])]
+                ranked_pids = [product_ids[idx] for idx in top_indices]
 
-            query_qrels = qrels[qid]
-            ndcg_scores.append(ndcg_at_k(ranked_pids, query_qrels, k=10))
-            recall_scores.append(recall_at_k(ranked_pids, query_qrels, k=100))
-            mrr_scores.append(mrr_at_k(ranked_pids, query_qrels, k=10))
+                query_qrels = qrels[qid]
+                ndcg_scores.append(ndcg_at_k(ranked_pids, query_qrels, k=10))
+                recall_scores.append(recall_at_k(ranked_pids, query_qrels, k=100))
+                mrr_scores.append(mrr_at_k(ranked_pids, query_qrels, k=10))
+
+        logger.info(f"All queries scored in {time.time() - t0:.1f}s")
 
         if not ndcg_scores:
             logger.warning("No queries with qrels found — returning zeros")
             return {"ndcg@10": 0.0, "recall@100": 0.0, "mrr@10": 0.0}
 
+        logger.info(f"Scored {len(ndcg_scores)} queries with qrels")
         results = {
             "ndcg@10": float(np.mean(ndcg_scores)),
             "recall@100": float(np.mean(recall_scores)),
@@ -138,6 +158,7 @@ class SpladeEvaluator:
         base_model_name: str = "naver/splade-cocondenser-ensembledistil",
         eval_batch_size: int = 64,
         show_progress: bool = True,
+        max_seq_length: Optional[int] = None,
     ) -> Dict[str, float]:
         """
         Evaluate the base SPLADE model (no fine-tuning) as a zero-shot baseline.
@@ -145,6 +166,9 @@ class SpladeEvaluator:
         """
         logger.info(f"Loading zero-shot baseline model: {base_model_name}")
         zs_model = SparseEncoder(base_model_name)
+        if max_seq_length is not None:
+            zs_model.max_seq_length = max_seq_length
+            logger.info(f"Zero-shot max_seq_length set to {max_seq_length} for fair comparison")
 
         logger.info("Evaluating zero-shot SPLADE baseline...")
         product_ids = [p["product_id"] for p in corpus]
@@ -159,20 +183,32 @@ class SpladeEvaluator:
             zs_model, query_texts, eval_batch_size, show_progress
         )
 
+        SCORE_CHUNK = 512
+        corpus_matrix_T = corpus_matrix.T.tocsc()
+
         ndcg_scores, recall_scores, mrr_scores = [], [], []
-        for i, query in enumerate(test_queries):
-            qid = query["query_id"]
-            if qid not in qrels or not qrels[qid]:
-                continue
-            scores = corpus_matrix.dot(query_matrix[i].T).toarray().flatten()
-            top_k = min(100, len(scores))
-            top_indices = np.argpartition(-scores, top_k)[:top_k]
-            top_indices = top_indices[np.argsort(-scores[top_indices])]
-            ranked_pids = [product_ids[idx] for idx in top_indices]
-            query_qrels = qrels[qid]
-            ndcg_scores.append(ndcg_at_k(ranked_pids, query_qrels, k=10))
-            recall_scores.append(recall_at_k(ranked_pids, query_qrels, k=100))
-            mrr_scores.append(mrr_at_k(ranked_pids, query_qrels, k=10))
+        n_queries = len(test_queries)
+        for chunk_start in range(0, n_queries, SCORE_CHUNK):
+            chunk_end = min(chunk_start + SCORE_CHUNK, n_queries)
+            chunk_scores = query_matrix[chunk_start:chunk_end].dot(corpus_matrix_T)
+
+            for local_i in range(chunk_end - chunk_start):
+                global_i = chunk_start + local_i
+                qid = test_queries[global_i]["query_id"]
+                if qid not in qrels or not qrels[qid]:
+                    continue
+                scores = chunk_scores[local_i].toarray().flatten()
+                top_k = min(100, len(scores))
+                if top_k >= len(scores):
+                    top_indices = np.argsort(-scores)
+                else:
+                    top_indices = np.argpartition(-scores, top_k)[:top_k]
+                    top_indices = top_indices[np.argsort(-scores[top_indices])]
+                ranked_pids = [product_ids[idx] for idx in top_indices]
+                query_qrels = qrels[qid]
+                ndcg_scores.append(ndcg_at_k(ranked_pids, query_qrels, k=10))
+                recall_scores.append(recall_at_k(ranked_pids, query_qrels, k=100))
+                mrr_scores.append(mrr_at_k(ranked_pids, query_qrels, k=10))
 
         results = {
             "ndcg@10": float(np.mean(ndcg_scores)) if ndcg_scores else 0.0,

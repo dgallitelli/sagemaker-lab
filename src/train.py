@@ -1,11 +1,12 @@
 """
-SageMaker training entry point for SPLADE fine-tuning on Amazon ESCI.
+SageMaker training entry point for SPLADE sparse embedding fine-tuning.
+
+Supports multiple datasets (ESCI, FiQA, NFCorpus) via normalized JSONL format.
 
 Training phases:
-  1. Initial training on easy negatives (E as positive, I as negative)
-  2. ANCE iteration 1: mine hard negatives with current model, retrain
-  3. ANCE iteration 2: mine harder negatives, retrain
-  4. Final in-memory evaluation vs BM25 baseline
+  1. Contrastive learning with in-batch negatives (E-labeled positives)
+  2. ANCE hard negative mining (1 iteration by default, configurable)
+  3. Best-model selection: compares Phase 1 vs ANCE, keeps best NDCG@10
 
 Reads hyperparameters from /opt/ml/input/config/hyperparameters.json (SageMaker standard).
 Override paths via SM_MODEL_DIR / SM_CHANNEL_TRAINING env vars for local mode.
@@ -15,12 +16,15 @@ Logs metrics in CloudWatch-parseable format: {"metric_name": "ndcg@10", "value":
 
 import json
 import logging
-import math
 import os
 import shutil
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+import time
+
+from evaluate import _build_product_text
 
 import torch
 import yaml
@@ -195,14 +199,6 @@ def build_hf_dataset(
     return Dataset.from_list(rows)
 
 
-def _build_product_text(product: Dict) -> str:
-    parts = [
-        product.get("title", ""),
-        product.get("description", ""),
-        product.get("bullet_points", ""),
-    ]
-    return " ".join(p for p in parts if p).strip()
-
 
 # ---------------------------------------------------------------------------
 # Metric logging (CloudWatch-parseable)
@@ -270,6 +266,7 @@ def run_training_phase(
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    pipeline_start = time.time()
     hp = load_hyperparameters()
     local_mode = os.environ.get("LOCAL_MODE", "0") == "1"
 
@@ -278,6 +275,13 @@ def main() -> None:
     logger.info(f"Training data dir: {TRAINING_DIR}")
     logger.info(f"Hyperparameters: {hp}")
     logger.info(f"Local mode: {local_mode}")
+
+    if torch.cuda.is_available():
+        for i in range(torch.cuda.device_count()):
+            mem = torch.cuda.get_device_properties(i).total_mem / 1024**3
+            logger.info(f"GPU {i}: {torch.cuda.get_device_name(i)} ({mem:.1f} GB)")
+    else:
+        logger.info("No CUDA GPUs available — running on CPU")
 
     # ── Imports (done here so errors surface early) ──────────────────────────
     from sentence_transformers import SparseEncoder
@@ -289,10 +293,12 @@ def main() -> None:
     from evaluate import SpladeEvaluator
 
     # ── Load data ────────────────────────────────────────────────────────────
+    t0 = time.time()
     train_pairs, test_queries, corpus, qrels = load_dataset(
         TRAINING_DIR, local_mode=local_mode
     )
     corpus_map = {p["product_id"]: p for p in corpus}
+    logger.info(f"Data loaded in {time.time() - t0:.1f}s")
 
     # Build initial easy-negative dataset:
     # Positives = E-labeled pairs; negatives = I-labeled products (in-batch)
@@ -304,9 +310,10 @@ def main() -> None:
     base_model = hp.get("base", "naver/splade-cocondenser-ensembledistil")
     max_seq_len = hp.get("max_seq_length", 256)
     logger.info(f"Loading base model: {base_model}")
-
+    t0 = time.time()
     model = SparseEncoder(base_model)
     model.max_seq_length = max_seq_len
+    logger.info(f"Model loaded in {time.time() - t0:.1f}s")
 
     # Multi-GPU: sentence-transformers Trainer handles DataParallel internally
     # via HuggingFace accelerate. Explicit DataParallel not needed.
@@ -326,6 +333,7 @@ def main() -> None:
     # ── Zero-shot baseline (before any training, model IS the base model) ───
     eval_batch_size = hp.get("eval_batch_size", 64)
     logger.info("=== ZERO-SHOT BASELINE ===")
+    t0 = time.time()
     zeroshot_evaluator = SpladeEvaluator(
         bm25_baseline_path=str(BM25_BASELINE_PATH)
         if BM25_BASELINE_PATH.exists()
@@ -334,18 +342,22 @@ def main() -> None:
     zeroshot_results = zeroshot_evaluator.evaluate(
         model, corpus, test_queries, qrels, eval_batch_size=eval_batch_size
     )
+    logger.info(f"Zero-shot eval completed in {time.time() - t0:.1f}s")
     for metric, value in zeroshot_results.items():
         log_metric(f"zeroshot/{metric}", value)
 
     # ── Phase 1: Initial training on easy negatives ──────────────────────────
     logger.info("=== PHASE 1: Initial training (easy negatives) ===")
+    t0 = time.time()
     train_dataset = build_hf_dataset(easy_pairs, corpus_map)
     run_training_phase(model, train_dataset, make_loss(model), MODEL_DIR, hp, "phase1_easy")
+    logger.info(f"Phase 1 training completed in {time.time() - t0:.1f}s")
 
     eval_results_per_phase = []
 
     # ── P0: Evaluate after Phase 1 ──────────────────────────────────────────
     logger.info("Evaluating after Phase 1...")
+    t0 = time.time()
     phase1_evaluator = SpladeEvaluator(
         bm25_baseline_path=str(BM25_BASELINE_PATH)
         if BM25_BASELINE_PATH.exists()
@@ -355,6 +367,7 @@ def main() -> None:
     phase1_results = phase1_evaluator.evaluate(
         model, corpus, test_queries, qrels, eval_batch_size=eval_batch_size
     )
+    logger.info(f"Phase 1 eval completed in {time.time() - t0:.1f}s")
     eval_results_per_phase.append(phase1_results)
     for metric, value in phase1_results.items():
         log_metric(f"phase1/{metric}", value, step=0)
@@ -391,24 +404,26 @@ def main() -> None:
 
     for ance_iter in range(1, ance_iters + 1):
         logger.info(f"=== ANCE ITERATION {ance_iter} ===")
+        ance_iter_start = time.time()
 
         # Mine hard negatives with current model state
+        t0 = time.time()
         miner.build_index(model, corpus, batch_size=eval_batch_size, show_progress=True)
         hard_neg_results = miner.mine(
             model, mining_queries, k=k_mining, n_hard=n_hard, batch_size=eval_batch_size
         )
-        # Keep corpus matrix for eval reuse, reset after eval
-        ance_corpus_matrix = miner._corpus_matrix
-        ance_product_ids = miner._product_ids
+        miner.reset()  # free mining state before training
 
         # {query_id: [neg_pid, ...]}
         hard_neg_map = {r["query_id"]: r["negative_ids"] for r in hard_neg_results}
         logger.info(
             f"ANCE iter {ance_iter}: {sum(len(v) for v in hard_neg_map.values())} "
-            f"hard negatives mined across {len(hard_neg_map)} queries"
+            f"hard negatives mined across {len(hard_neg_map)} queries "
+            f"in {time.time() - t0:.1f}s"
         )
 
         # P2: Lower LR for ANCE, P4: No warmup on continuation phases
+        t0 = time.time()
         ance_batch_size = hp.get("ance_batch_size", hp.get("batch_size", 32))
         ance_dataset = build_hf_dataset(easy_pairs, corpus_map, hard_negatives_map=hard_neg_map)
         run_training_phase(
@@ -418,8 +433,11 @@ def main() -> None:
             warmup_override=0.0,
         )
 
-        # Evaluate after each ANCE iteration (reuse corpus matrix from mining)
-        logger.info(f"Evaluating after ANCE iteration {ance_iter}...")
+        logger.info(f"ANCE iter {ance_iter} training completed in {time.time() - t0:.1f}s")
+
+        # Evaluate after ANCE — re-encode corpus with updated model weights
+        logger.info(f"Evaluating after ANCE iteration {ance_iter} (fresh corpus encoding)...")
+        t0 = time.time()
         evaluator = SpladeEvaluator(
             bm25_baseline_path=str(BM25_BASELINE_PATH)
             if BM25_BASELINE_PATH.exists()
@@ -428,9 +446,8 @@ def main() -> None:
         evaluator.zeroshot_results = zeroshot_results
         iter_results = evaluator.evaluate(
             model, corpus, test_queries, qrels, eval_batch_size=eval_batch_size,
-            precomputed_corpus_matrix=ance_corpus_matrix,
         )
-        miner.reset()  # free memory after eval reuse
+        logger.info(f"ANCE iter {ance_iter} eval completed in {time.time() - t0:.1f}s")
         eval_results_per_phase.append(iter_results)
 
         for metric, value in iter_results.items():
@@ -448,6 +465,7 @@ def main() -> None:
                 f"ANCE iter {ance_iter} did not improve (NDCG@10={iter_ndcg:.4f} "
                 f"vs best={best_ndcg:.4f} from {best_phase}). Keeping best checkpoint."
             )
+        logger.info(f"ANCE iteration {ance_iter} total: {time.time() - ance_iter_start:.1f}s")
 
     # ── P1: Restore best checkpoint if last phase wasn't the best ───────────
     last_phase = f"phase_ance{ance_iters}" if ance_iters > 0 else "phase1_easy"
@@ -457,16 +475,23 @@ def main() -> None:
         model.max_seq_length = max_seq_len
 
     # ── Final evaluation ─────────────────────────────────────────────────────
-    logger.info("=== FINAL EVALUATION ===")
-    final_evaluator = SpladeEvaluator(
-        bm25_baseline_path=str(BM25_BASELINE_PATH) if BM25_BASELINE_PATH.exists() else None
-    )
-    final_evaluator.zeroshot_results = zeroshot_results
-
-    # Fine-tuned model eval (prints 3-row comparison: BM25 | zero-shot | fine-tuned)
-    final_results = final_evaluator.evaluate(
-        model, corpus, test_queries, qrels, eval_batch_size=eval_batch_size
-    )
+    # Skip redundant re-encoding if best model is from a phase we already evaluated
+    if best_phase == "phase1_easy" and eval_results_per_phase:
+        logger.info(f"=== FINAL EVALUATION (reusing Phase 1 results — best_phase={best_phase}) ===")
+        final_results = eval_results_per_phase[0]
+    elif best_phase.startswith("phase_ance") and len(eval_results_per_phase) > 1:
+        ance_idx = int(best_phase.replace("phase_ance", ""))
+        logger.info(f"=== FINAL EVALUATION (reusing {best_phase} results) ===")
+        final_results = eval_results_per_phase[ance_idx]  # index 0=phase1, 1=ance1, ...
+    else:
+        logger.info("=== FINAL EVALUATION ===")
+        final_evaluator = SpladeEvaluator(
+            bm25_baseline_path=str(BM25_BASELINE_PATH) if BM25_BASELINE_PATH.exists() else None
+        )
+        final_evaluator.zeroshot_results = zeroshot_results
+        final_results = final_evaluator.evaluate(
+            model, corpus, test_queries, qrels, eval_batch_size=eval_batch_size
+        )
 
     for metric, value in final_results.items():
         log_metric(f"final/{metric}", value)
@@ -493,7 +518,12 @@ def main() -> None:
         shutil.rmtree(best_model_dir)
 
     logger.info(f"Metrics saved to {metrics_path}")
-    logger.info(f"Training complete. Best phase: {best_phase} (NDCG@10={best_ndcg:.4f})")
+    total_elapsed = time.time() - pipeline_start
+    logger.info(
+        f"=== PIPELINE COMPLETE === "
+        f"Total: {total_elapsed / 60:.1f} min ({total_elapsed / 3600:.2f} h) | "
+        f"Best phase: {best_phase} (NDCG@10={best_ndcg:.4f})"
+    )
 
 
 if __name__ == "__main__":
