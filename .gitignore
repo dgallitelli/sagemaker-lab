@@ -38,5 +38,8 @@ bedrock_results_v2.json
 diagram.mmd
 CLAUDE.md
 
+# Results (reproducible from code)
+results/
+
 # ClearanceAI evaluation (contains references to private project)
 clearanceai-splade-eval/

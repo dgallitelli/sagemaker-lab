@@ -1,56 +1,85 @@
-# SPLADE Fine-Tuning on SageMaker
+# Fine-Tuning SPLADE Sparse Embeddings on Amazon SageMaker
 
-Fine-tune a [SPLADE](https://arxiv.org/abs/2109.10086) sparse embedding model using ANCE hard negative mining on Amazon SageMaker. Built on [sentence-transformers v5](https://sbert.net/) `SparseEncoder` with the `naver/splade-cocondenser-ensembledistil` base model. Targets three domains: Amazon ESCI (e-commerce), FiQA (financial QA), and NFCorpus (biomedical).
+> Fine-tune a [SPLADE](https://arxiv.org/abs/2109.10086) sparse embedding model with ANCE hard negative mining, entirely self-contained inside a single SageMaker training job. No external vector databases, no network calls beyond SageMaker itself.
 
-## Results
+```mermaid
+flowchart TB
+    subgraph SM["SageMaker Training Job"]
+        direction TB
+        DATA["Domain Data<br/>(S3 JSONL)"]
+        P1["Phase 1: In-Batch Negatives<br/>(contrastive learning)"]
+        EVAL1["Eval: NDCG@10<br/>(save checkpoint)"]
+        MINE["ANCE Miner<br/>(scipy sparse Q @ C.T)"]
+        P2["Phase 2: Hard Negatives<br/>(lower LR)"]
+        EVAL2["Eval: NDCG@10,<br/>Recall@100, MRR@10"]
+        BEST["Best-Model Selection<br/>(keep best NDCG@10)"]
 
-Fine-tuned SPLADE vs BM25 baseline (NDCG@10 / Recall@100 / MRR@10):
+        DATA --> P1 --> EVAL1 --> MINE --> P2 --> EVAL2 --> BEST
+    end
 
-```
-Dataset     Corpus     BM25                        Zero-shot                   Fine-tuned
-            size       NDCG   R@100  MRR           NDCG   R@100  MRR           NDCG   R@100  MRR
-----------  --------   -----  -----  -----         -----  -----  -----         -----  -----  -----
-ESCI-200k   503,839    0.377  0.535  0.586         0.463  0.640  0.671         0.489  0.685  0.686
-FiQA         57,638    0.159  0.359  0.199         0.356  0.636  0.426         0.365  0.694  0.442
-NFCorpus      3,633    0.267  0.211  0.467         0.348  0.284  0.575         0.368  0.416  0.556
-```
+    BEST --> MODEL["Model Artifact (S3)"]
+    BEST --> CW["CloudWatch Metrics"]
+    MODEL --> EP["SageMaker Endpoint<br/>(TEI + SPLADE pooling)"]
 
-ANCE hard negative mining improves recall significantly but can regress on small datasets. Best-model selection (Phase 1 checkpoint vs ANCE) is applied automatically.
-
-## Project Structure
-
-```
-src/                            # Shared training pipeline (dataset-agnostic)
-  train.py                      # Entry point (SageMaker + local mode)
-  ance_miner.py                 # ANCE hard negative mining via scipy sparse matrices
-  evaluate.py                   # NDCG@10 / Recall@100 / MRR@10 + zero-shot baseline
-  sagemaker_launcher.py         # Launch SageMaker job or run locally with --local
-  config.yaml                   # Hyperparameters
-  requirements.txt
-datasets/                       # Per-dataset data preparation
-  common.py                     # Shared: BM25 eval, metrics, corpus building, I/O
-  prepare_esci.py               # Amazon ESCI (e-commerce, 4-level graded relevance)
-  prepare_fiqa.py               # FiQA (financial QA, binary relevance)
-  prepare_nfcorpus.py           # NFCorpus (biomedical, graded relevance)
-  sagemaker_processing.py       # Launch SageMaker Processing for large datasets
-data/                           # Generated output (gitignored)
-  esci/                         # train.jsonl, test.jsonl, corpus.jsonl, bm25_baseline_results.json
-  fiqa/
-  nfcorpus/
-deploy_endpoint.py              # Deploy trained model to SageMaker TEI endpoint
+    style SM fill:#232f3e,stroke:#ff9900,color:#fff
+    style MODEL fill:#3b48cc,stroke:#232f3e,color:#fff
+    style CW fill:#3b48cc,stroke:#232f3e,color:#fff
+    style EP fill:#ff9900,stroke:#232f3e,color:#fff
 ```
 
-## Training Pipeline
+## Problem
 
-```
-Phase 1: In-batch negatives (positives only, contrastive learning)
-    |
-ANCE Iter 1: Encode corpus -> mine hard negatives -> retrain with triplets
-    |
-Best-model selection: compare Phase 1 vs ANCE checkpoints on dev set
-    |
-Final evaluation: BM25 | zero-shot | fine-tuned comparison
-```
+Dense embedding models handle vocabulary mismatch well ("couch" finds "sofa") but collapse distinctions that matter. A query for "iPhone 256GB" retrieves 128GB models just as confidently. BM25 handles exact terms but lacks synonym expansion or concept matching.
+
+[SPLADE](https://arxiv.org/abs/2107.05720) combines both: sparse vectors with exact term matching **plus** learned term expansion from a BERT MLM head. The output is interpretable, slots into inverted index infrastructure, and can be fine-tuned for your domain.
+
+## Approach
+
+Two-phase training pipeline on [`naver/splade-cocondenser-ensembledistil`](https://huggingface.co/naver/splade-cocondenser-ensembledistil), the strongest open SPLADE checkpoint. Built on [sentence-transformers v5](https://sbert.net/) `SparseEncoder`.
+
+| Phase | What happens | Why |
+|-------|-------------|-----|
+| Phase 1 | Contrastive learning with in-batch negatives | Efficient baseline — every non-paired doc in batch is a negative |
+| Phase 2 (ANCE) | Encode corpus, mine hard negatives via sparse matmul, retrain | Teaches the model from its own mistakes |
+| Best-model selection | Compare Phase 1 vs ANCE on NDCG@10, keep the winner | ANCE can regress on small datasets (false negatives from unlabeled corpus) |
+
+Same code, same hyperparameters across all three datasets — only the data changes.
+
+## Dataset & Results
+
+Three domains, evaluated in-domain (fine-tuned on each dataset's training split, evaluated on its test split). BM25 and [BGE-large-en-v1.5](https://huggingface.co/BAAI/bge-large-en-v1.5) (1024-dim dense) as baselines.
+
+### Amazon ESCI: E-commerce Product Search
+
+200K training pairs, 22,458 test queries, 503,839-document corpus. 4-level graded relevance (Exact/Substitute/Complement/Irrelevant).
+
+| Metric | BM25 | BGE | Zero-shot | Fine-tuned | vs ZS | vs BM25 |
+|--------|------|-----|-----------|------------|-------|---------|
+| NDCG@10 | 0.377 | 0.441 | 0.463 | **0.489** | +5.6% | +30% |
+| Recall@100 | 0.535 | 0.625 | 0.640 | **0.685** | +7.1% | +28% |
+| MRR@10 | 0.586 | 0.654 | 0.671 | **0.686** | +2.2% | +17% |
+
+### FiQA: Financial Question Answering
+
+14,166 training pairs, 648 test queries, 57,638-document corpus. Binary relevance.
+
+| Metric | BM25 | BGE | Zero-shot | Fine-tuned | vs ZS | vs BM25 |
+|--------|------|-----|-----------|------------|-------|---------|
+| NDCG@10 | 0.159 | **0.450** | 0.356 | 0.365 | +2.5% | +129% |
+| Recall@100 | 0.359 | **0.770** | 0.636 | 0.694 | +9.0% | +93% |
+| MRR@10 | 0.199 | **0.534** | 0.426 | 0.442 | +3.7% | +123% |
+
+### NFCorpus: Biomedical Literature Retrieval
+
+110,575 training pairs, 323 test queries, 3,633-document corpus. Graded relevance (0/1/2).
+
+| Metric | BM25 | BGE | Zero-shot | Fine-tuned | vs ZS | vs BM25 |
+|--------|------|-----|-----------|------------|-------|---------|
+| NDCG@10 | 0.267 | **0.382** | 0.348 | 0.368 | +5.7% | +38% |
+| Recall@100 | 0.211 | 0.364 | 0.284 | **0.416** | +46.3% | +98% |
+| MRR@10 | 0.467 | **0.576** | 0.575 | 0.556 | -3.4% | +19% |
+
+**Takeaway:** Fine-tuning improves over zero-shot on every dataset. SPLADE wins decisively at scale (ESCI) and on recall (NFCorpus). BGE-large wins on smaller datasets where pure semantic matching dominates (FiQA, NFCorpus NDCG). Best-model selection was critical — ANCE regressed on both small datasets, and the pipeline automatically fell back to the Phase 1 checkpoint.
 
 ## Setup
 
@@ -95,32 +124,44 @@ python src/sagemaker_launcher.py --data-prefix splade-data/esci --skip-upload
 
 Uses `ml.g5.2xlarge` with spot instances by default (max_wait=7200s).
 
-### 4. Deploy and cleanup
+### 4. Deploy and clean up
 
 ```bash
-# Deploy to SageMaker real-time endpoint (TEI container)
+# Deploy to SageMaker real-time endpoint (TEI container with SPLADE pooling)
 python deploy_endpoint.py --model-artifact s3://<bucket>/splade-training-output/model.tar.gz
 
 # Delete endpoint when done
 python deploy_endpoint.py --endpoint-name splade-esci-endpoint --delete
 ```
 
-## Key Design Decisions
+## File Structure
 
-- **Base model**: `naver/splade-cocondenser-ensembledistil` -- strongest open SPLADE checkpoint
-- **ANCE mining**: Uses scipy sparse matrices for in-memory approximate nearest neighbor search. No external vector DB required.
-- **Best-model selection**: Saves Phase 1 checkpoint and compares against ANCE iterations. ANCE can regress on small datasets due to false negatives from unlabeled corpus entries.
-- **Zero-shot baseline**: `evaluate.py` runs the base model (no fine-tuning) before evaluating the fine-tuned model, producing a three-row comparison: BM25 / zero-shot / fine-tuned.
-- **Graded relevance**: NFCorpus preserves `raw_score` (0/1/2) for NDCG; ESCI uses 4-level E/S/C/I labels.
-- **CloudWatch metrics**: `train.py` logs `{"metric_name": "...", "value": ...}` JSON to stdout for SageMaker metric tracking.
-
-## SageMaker SDK v3
-
-This project uses the SageMaker Python SDK v3 `ModelTrainer` API exclusively (not legacy framework estimators):
-
-```python
-from sagemaker.train.model_trainer import ModelTrainer
-from sagemaker.train.configs import InputData, Compute, SourceCode, OutputDataConfig
+```
+├── README.md
+├── deploy_endpoint.py                    # Deploy / evaluate / delete endpoint
+├── src/                                  # Training pipeline (dataset-agnostic)
+│   ├── train.py                          # Entry point (SageMaker + local)
+│   ├── ance_miner.py                     # ANCE hard negative mining (scipy sparse)
+│   ├── evaluate.py                       # NDCG@10, Recall@100, MRR@10
+│   ├── sagemaker_launcher.py             # Launch SageMaker job or run locally
+│   ├── config.yaml                       # Hyperparameters
+│   └── requirements.txt                  # Training container deps
+├── datasets/                             # Per-dataset data preparation
+│   ├── common.py                         # Shared: BM25 eval, metrics, I/O
+│   ├── prepare_esci.py                   # Amazon ESCI (e-commerce)
+│   ├── prepare_fiqa.py                   # FiQA (financial QA)
+│   ├── prepare_nfcorpus.py              # NFCorpus (biomedical)
+│   └── sagemaker_processing.py           # SageMaker Processing for large datasets
+└── data/                                 # Generated output (gitignored)
+    ├── esci/
+    ├── fiqa/
+    └── nfcorpus/
 ```
 
-Note: SDK v3.4.1 has a known bug where `get_training_code_hash()` crashes when `requirements` is a string. A patch is applied in `sagemaker_launcher.py`. See [issue #5518](https://github.com/aws/sagemaker-python-sdk/issues/5518).
+## Key Technical Decisions
+
+- **All-in-one training job**: Both training phases, ANCE mining, and evaluation run inside a single SageMaker container. No orchestration, no external services.
+- **Scipy sparse over vector DB**: SPLADE vectors have ~50-200 non-zero entries out of ~30K dimensions. CSR matrix + batch dot product leverages BLAS-optimized sparse linear algebra with zero dependencies. 500K corpus mines in minutes.
+- **Best-model selection**: ANCE hard negatives can surface false negatives from unlabeled corpus entries, degrading small-dataset performance. The pipeline saves Phase 1 and automatically restores it if ANCE regresses.
+- **Graded relevance**: NFCorpus preserves `raw_score` (0/1/2) for NDCG; ESCI uses 4-level E/S/C/I labels mapped to graded scores.
+- **SageMaker SDK v3**: Uses `ModelTrainer` API exclusively (not legacy framework estimators). Note: SDK v3.4.1 has a [known bug](https://github.com/aws/sagemaker-python-sdk/issues/5518) with `get_training_code_hash()` — patched in `sagemaker_launcher.py`.

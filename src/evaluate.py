@@ -11,7 +11,7 @@ import logging
 import math
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import numpy as np
 from scipy.sparse import csr_matrix
@@ -148,80 +148,6 @@ class SpladeEvaluator:
         }
 
         self._print_results(results)
-        return results
-
-    def evaluate_zeroshot(
-        self,
-        corpus: List[Dict],
-        test_queries: List[Dict],
-        qrels: Dict[str, Dict[str, float]],
-        base_model_name: str = "naver/splade-cocondenser-ensembledistil",
-        eval_batch_size: int = 64,
-        show_progress: bool = True,
-        max_seq_length: Optional[int] = None,
-    ) -> Dict[str, float]:
-        """
-        Evaluate the base SPLADE model (no fine-tuning) as a zero-shot baseline.
-        Stores results internally for comparison in _print_results.
-        """
-        logger.info(f"Loading zero-shot baseline model: {base_model_name}")
-        zs_model = SparseEncoder(base_model_name)
-        if max_seq_length is not None:
-            zs_model.max_seq_length = max_seq_length
-            logger.info(f"Zero-shot max_seq_length set to {max_seq_length} for fair comparison")
-
-        logger.info("Evaluating zero-shot SPLADE baseline...")
-        product_ids = [p["product_id"] for p in corpus]
-
-        corpus_texts = [_build_product_text(p) for p in corpus]
-        corpus_matrix = _encode_to_sparse_matrix(
-            zs_model, corpus_texts, eval_batch_size, show_progress
-        )
-
-        query_texts = [q["query"] for q in test_queries]
-        query_matrix = _encode_to_sparse_matrix(
-            zs_model, query_texts, eval_batch_size, show_progress
-        )
-
-        SCORE_CHUNK = 512
-        corpus_matrix_T = corpus_matrix.T.tocsc()
-
-        ndcg_scores, recall_scores, mrr_scores = [], [], []
-        n_queries = len(test_queries)
-        for chunk_start in range(0, n_queries, SCORE_CHUNK):
-            chunk_end = min(chunk_start + SCORE_CHUNK, n_queries)
-            chunk_scores = query_matrix[chunk_start:chunk_end].dot(corpus_matrix_T)
-
-            for local_i in range(chunk_end - chunk_start):
-                global_i = chunk_start + local_i
-                qid = test_queries[global_i]["query_id"]
-                if qid not in qrels or not qrels[qid]:
-                    continue
-                scores = chunk_scores[local_i].toarray().flatten()
-                top_k = min(100, len(scores))
-                if top_k >= len(scores):
-                    top_indices = np.argsort(-scores)
-                else:
-                    top_indices = np.argpartition(-scores, top_k)[:top_k]
-                    top_indices = top_indices[np.argsort(-scores[top_indices])]
-                ranked_pids = [product_ids[idx] for idx in top_indices]
-                query_qrels = qrels[qid]
-                ndcg_scores.append(ndcg_at_k(ranked_pids, query_qrels, k=10))
-                recall_scores.append(recall_at_k(ranked_pids, query_qrels, k=100))
-                mrr_scores.append(mrr_at_k(ranked_pids, query_qrels, k=10))
-
-        results = {
-            "ndcg@10": float(np.mean(ndcg_scores)) if ndcg_scores else 0.0,
-            "recall@100": float(np.mean(recall_scores)) if recall_scores else 0.0,
-            "mrr@10": float(np.mean(mrr_scores)) if mrr_scores else 0.0,
-        }
-
-        self.zeroshot_results = results
-        logger.info(f"Zero-shot baseline: {results}")
-
-        # Free model memory
-        del zs_model
-
         return results
 
     def _print_results(self, splade_results: Dict[str, float]) -> None:

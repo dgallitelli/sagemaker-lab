@@ -22,6 +22,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 DEFAULT_ENDPOINT_NAME = "splade-esci-endpoint"
+
+
+def _build_product_text(product: Dict) -> str:
+    parts = [
+        product.get("title", ""),
+        product.get("description", ""),
+        product.get("bullet_points", ""),
+    ]
+    return " ".join(p for p in parts if p).strip()
+
 INSTANCE_TYPE = "ml.g5.xlarge"
 
 
@@ -205,16 +215,12 @@ def evaluate_endpoint(
     qrels: Dict[str, Dict[str, float]] = defaultdict(dict)
     query_map: Dict[str, str] = {}
     for pair in test_pairs:
-        qrels[pair["query_id"]][pair["product_id"]] = LABEL_SCORES.get(
-            pair.get("esci_label", "I"), 0.0
-        )
+        score = pair.get("raw_score", LABEL_SCORES.get(pair.get("esci_label", "I"), 0.0))
+        qrels[pair["query_id"]][pair["product_id"]] = score
         query_map[pair["query_id"]] = pair["query"]
 
     # Encode corpus
-    corpus_texts = [
-        " ".join(filter(None, [p.get("title"), p.get("description"), p.get("bullet_points")]))
-        for p in corpus
-    ]
+    corpus_texts = [_build_product_text(p) for p in corpus]
     product_ids = [p["product_id"] for p in corpus]
 
     logger.info(f"Encoding {len(corpus)} corpus documents via endpoint...")
