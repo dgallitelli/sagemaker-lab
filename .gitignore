@@ -31,11 +31,12 @@ firebase-debug.log
 .continue-here.md
 .claude/
 
-# Stale results (superseded by results/)
-bedrock_baseline_results.json
-
-# Blog post (not for repo)
+# Working files (not for repo)
 aws_blog_post.md
+bedrock_baseline_results.json
+bedrock_results_v2.json
+diagram.mmd
+CLAUDE.md
 
 # ClearanceAI evaluation (contains references to private project)
 clearanceai-splade-eval/
