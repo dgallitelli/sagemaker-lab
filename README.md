@@ -296,6 +296,31 @@ test:
 | Mixed-NPZ | 15,721 | 0.795 | ok (10× smaller) |
 | Row-list JSON with strings | 165,863 | n/a | **500** (numpy upcasts to string) |
 
+### Async inference — verified to 1M rows on a single g5.xlarge
+
+Deploying with `--mode async` swaps the realtime 6 MB / 60 s caps for an
+S3-staged payload up to 1 GB and a 60 min response budget. Combined with
+NPZ encoding and `SUBSAMPLE_SAMPLES=10000`, a single `ml.g5.xlarge` (24 GB
+A10G) handles a million-row training set in under 11 seconds end-to-end:
+
+| n_train (32 feat) | NPZ wire MB | raw MB | poll s (E2E) | fit s | predict s | peak GB | accuracy |
+|---|---|---|---|---|---|---|---|
+| 10,000 | 1.2 | 1.3 | 7.4 | 1.06 | 3.41 | 0.62 | 0.990 |
+| 100,000 | 12.0 | 12.8 | 7.2 | 0.71 | 2.96 | 0.60 | 0.995 |
+| 500,000 | 59.9 | 64.0 | 7.3 | 1.39 | 2.95 | 0.60 | 0.990 |
+| **1,000,000** | **119.6** | **128.0** | **10.8** | **2.62** | **2.95** | **0.60** | **0.995** |
+
+Predict latency is **constant at ~3 s** regardless of N (subsample is
+doing the work — each of TabPFN's 8 estimators sees a different random
+10k-row subsample). Peak VRAM stays at 0.6 GB across all sizes — N²
+attention is bounded by `SUBSAMPLE_SAMPLES`, not the payload.
+
+**Gotcha**: TorchServe inside the DLC defaults to a ~6.5 MB request cap.
+Async at the SageMaker frontend supports 1 GB, but the container-side
+limit bites first on payloads above ~6 MB. The deploy script sets
+`TS_MAX_REQUEST_SIZE=1073741824` (and `_RESPONSE_SIZE`) on async
+endpoints to lift this. If you build your own deploy, set both env vars.
+
 ### CPU serving — works but uneconomical
 
 Same handler runs on CPU instances with a CPU DLC base. The `model_fn` auto-

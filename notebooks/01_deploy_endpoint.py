@@ -200,6 +200,12 @@ def main() -> int:
             "SAGEMAKER_MODEL_SERVER_TIMEOUT": "3600",
             "SAGEMAKER_MODEL_SERVER_WORKERS": "1",
             "TS_DEFAULT_RESPONSE_TIMEOUT": "3600",
+            # TorchServe defaults max request/response to 6.5 MB. Async
+            # supports up to 1 GB at the SageMaker API level, but the
+            # container-side limit is what bites first on 100k+ row payloads.
+            # Set both to 1 GB.
+            "TS_MAX_REQUEST_SIZE": "1073741824",
+            "TS_MAX_RESPONSE_SIZE": "1073741824",
         },
     )
 
