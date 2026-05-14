@@ -546,14 +546,9 @@ def run_anomaly_tabpfn(predictor, split: dict[str, np.ndarray]) -> dict[str, Any
 # Deploy / orchestrate
 # ---------------------------------------------------------------------------
 
-def deploy(image_uri: str, model_data: str, instance_type: str, role: str,
-           sm_session: sagemaker.Session, source_dir: str):
-    endpoint_name = (
-        f"tabpfn3-{instance_type.replace('.', '-')}-"
-        f"{datetime.utcnow():%Y%m%d-%H%M%S}"
-    )
-    print(f"\n--- Deploying {instance_type} as {endpoint_name} ---")
-    model = PyTorchModel(
+def _build_model(image_uri: str, model_data: str, role: str,
+                 sm_session: sagemaker.Session, source_dir: str) -> PyTorchModel:
+    return PyTorchModel(
         image_uri=image_uri,
         model_data=model_data,
         role=role,
@@ -567,15 +562,49 @@ def deploy(image_uri: str, model_data: str, instance_type: str, role: str,
             "TS_DEFAULT_RESPONSE_TIMEOUT": "120",
         },
     )
-    predictor = model.deploy(
-        initial_instance_count=1,
-        instance_type=instance_type,
-        endpoint_name=endpoint_name,
-        serializer=JSONSerializer(),
-        deserializer=JSONDeserializer(),
-        container_startup_health_check_timeout=600,
+
+
+def deploy(image_uri: str, model_data: str, instance_type: str, role: str,
+           sm_session: sagemaker.Session, source_dir: str,
+           fallback_types: list[str] | None = None):
+    """Deploy on `instance_type`. If we hit InsufficientInstanceCapacity, try
+    each instance in `fallback_types` in order. Returns (endpoint_name,
+    predictor, instance_type_actually_used)."""
+    candidates = [instance_type] + list(fallback_types or [])
+    last_err: Exception | None = None
+    for itype in candidates:
+        endpoint_name = (
+            f"tabpfn3-{itype.replace('.', '-')}-"
+            f"{datetime.utcnow():%Y%m%d-%H%M%S}"
+        )
+        print(f"\n--- Deploying {itype} as {endpoint_name} ---")
+        model = _build_model(image_uri, model_data, role, sm_session, source_dir)
+        try:
+            predictor = model.deploy(
+                initial_instance_count=1,
+                instance_type=itype,
+                endpoint_name=endpoint_name,
+                serializer=JSONSerializer(),
+                deserializer=JSONDeserializer(),
+                container_startup_health_check_timeout=600,
+            )
+            return endpoint_name, predictor, itype
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc)
+            last_err = exc
+            if "InsufficientInstanceCapacity" in msg or "capacity" in msg.lower():
+                print(f"  ! capacity unavailable for {itype}; trying next fallback")
+                # The endpoint exists in Failed state; clean up before retry.
+                try:
+                    sm_session.delete_endpoint(endpoint_name)
+                    sm_session.delete_endpoint_config(endpoint_name)
+                except Exception:
+                    pass
+                continue
+            raise
+    raise RuntimeError(
+        f"All deploys failed (tried {candidates}). Last error: {last_err}"
     )
-    return endpoint_name, predictor
 
 
 def attach_predictor(endpoint_name: str, sm_session: sagemaker.Session) -> Predictor:
@@ -687,7 +716,14 @@ def main() -> int:
     parser.add_argument("--model-data", required=True)
     parser.add_argument(
         "--instance-types",
-        default="ml.g6e.xlarge,ml.g7e.xlarge,ml.p5.xlarge",
+        default="ml.g5.xlarge,ml.g6e.xlarge",
+        help="Comma-separated GPU instance types to benchmark in order",
+    )
+    parser.add_argument(
+        "--fallback-instance-types",
+        default="ml.g5.xlarge,ml.g5.2xlarge",
+        help="Comma-separated GPU instances to try if the primary hits "
+             "InsufficientInstanceCapacity. Tried in order.",
     )
     parser.add_argument(
         "--row-sizes",
@@ -725,6 +761,9 @@ def main() -> int:
     )
 
     instance_types = [s.strip() for s in args.instance_types.split(",") if s.strip()]
+    fallback_types_global = [
+        s.strip() for s in args.fallback_instance_types.split(",") if s.strip()
+    ]
     row_sizes = [int(s) for s in args.row_sizes.split(",") if s.strip()]
 
     existing_endpoints: dict[str, str] = {}
@@ -820,20 +859,35 @@ def main() -> int:
 
     synthetic_results: dict[str, list[dict[str, Any]]] = {}
 
+    covered_instances: set[str] = set()
     for itype in instance_types:
+        if itype in covered_instances:
+            print(f"\n--- Skipping {itype}: already covered via fallback ---")
+            continue
         endpoint_name = None
         reused_endpoint = False
+        # Fallbacks: skip the instance we're trying, and skip any we've
+        # already benchmarked so we don't re-do work.
+        per_instance_fallbacks = [
+            f for f in fallback_types_global
+            if f != itype and f not in covered_instances
+        ]
         try:
             if itype in existing_endpoints:
                 endpoint_name = existing_endpoints[itype]
                 reused_endpoint = True
                 print(f"\n--- Reusing existing endpoint {endpoint_name} for {itype} ---")
                 predictor = attach_predictor(endpoint_name, sm_session)
+                actual_itype = itype
             else:
-                endpoint_name, predictor = deploy(
+                endpoint_name, predictor, actual_itype = deploy(
                     args.image_uri, args.model_data, itype, role, sm_session,
-                    source_dir,
+                    source_dir, fallback_types=per_instance_fallbacks,
                 )
+                if actual_itype != itype:
+                    print(f"  (fell back from {itype} to {actual_itype})")
+                    itype = actual_itype  # downstream rows are tagged with the actual instance
+            covered_instances.add(itype)
 
             if not args.skip_synthetic:
                 print(f"\n--- Synthetic sweep on {itype} ---")
