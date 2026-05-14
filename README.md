@@ -215,7 +215,8 @@ python notebooks/03_cleanup.py --region $AWS_DEFAULT_REGION
 ## Findings (P1 probe results, 2026-05-14)
 
 Live-tested against `tabpfn==8.0.2` on `ml.g5.xlarge` (A10G, 24 GB) and
-`ml.c6i.32xlarge` (128 vCPU, 256 GB).
+`ml.c6i.32xlarge` (128 vCPU, 256 GB). Full write-up in
+[RESULTS.md](RESULTS.md).
 
 ### Real-world datasets — TabPFN beats XGBoost on 5 of 6
 
