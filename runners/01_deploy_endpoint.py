@@ -2,13 +2,13 @@
 
 Usage:
     # Real-time endpoint (sync InvokeEndpoint, 6 MB payload cap, 60s timeout)
-    python notebooks/01_deploy_endpoint.py \\
+    python runners/01_deploy_endpoint.py \\
         --image-uri <ecr-uri> \\
         --model-data s3://.../model.tar.gz \\
         --instance-type ml.g5.xlarge
 
     # Async endpoint (S3-staged payload up to 1 GB, 60 min timeout, scale-to-zero)
-    python notebooks/01_deploy_endpoint.py \\
+    python runners/01_deploy_endpoint.py \\
         --image-uri <ecr-uri> \\
         --model-data s3://.../model.tar.gz \\
         --instance-type ml.g5.xlarge \\

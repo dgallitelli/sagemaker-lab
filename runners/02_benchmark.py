@@ -22,7 +22,7 @@ Four sections, all toggleable via --skip-* flags:
 Local baselines run once (instance-independent); TabPFN runs on each endpoint.
 
 Usage:
-    python notebooks/02_benchmark.py \
+    python runners/02_benchmark.py \
         --image-uri <ecr-uri> \
         --model-data s3://.../model.tar.gz \
         --instance-types ml.g6e.xlarge,ml.g7e.xlarge,ml.p5.xlarge

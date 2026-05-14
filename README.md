@@ -77,7 +77,7 @@ tabpfn3-sagemaker-experiments/
 │   ├── download_and_package_weights.py   # local cache → model.tar.gz → S3
 │   ├── request_quota.py                  # check / request endpoint quotas
 │   └── probe_row_capacity.py             # P1.2 driver
-└── notebooks/
+└── runners/
     ├── 01_deploy_endpoint.py  # deploy + smoke test
     ├── 02_benchmark.py        # cross-instance + 4-section benchmark
     └── 03_cleanup.py          # delete endpoints, optional ECR / S3 cleanup
@@ -204,20 +204,20 @@ container/build_and_push.sh tabpfn3-sagemaker $AWS_DEFAULT_REGION cpu
 # 4. Deploy on g5.xlarge and run a sklearn smoke test.
 ACCT=$(aws sts get-caller-identity --query Account --output text)
 ECR_URI=${ACCT}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/tabpfn3-sagemaker:latest
-python notebooks/01_deploy_endpoint.py \
+python runners/01_deploy_endpoint.py \
     --image-uri "$ECR_URI" \
     --model-data "s3://$BUCKET/tabpfn3/model.tar.gz" \
     --instance-type ml.g5.xlarge \
     --region $AWS_DEFAULT_REGION
 
 # 5. Cross-instance benchmark (auto-deletes endpoints unless --keep-endpoints).
-python notebooks/02_benchmark.py \
+python runners/02_benchmark.py \
     --image-uri "$ECR_URI" \
     --model-data "s3://$BUCKET/tabpfn3/model.tar.gz" \
     --instance-types ml.g5.xlarge,ml.g6e.xlarge
 
 # 6. Tear down anything left over.
-python notebooks/03_cleanup.py --region $AWS_DEFAULT_REGION
+python runners/03_cleanup.py --region $AWS_DEFAULT_REGION
 ```
 
 ## Findings (P1 probe results, 2026-05-14)
@@ -354,7 +354,7 @@ every dimension.**
 ## Cost note
 
 Real-time endpoints bill per-instance-hour while `InService`, even when idle.
-`notebooks/03_cleanup.py` deletes anything matching the `tabpfn3-` prefix.
+`runners/03_cleanup.py` deletes anything matching the `tabpfn3-` prefix.
 
 ## Roadmap
 

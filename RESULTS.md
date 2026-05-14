@@ -442,21 +442,21 @@ All findings reproducible from this repo:
 
 ```bash
 # Deploy GPU realtime
-python notebooks/01_deploy_endpoint.py --image-uri <ecr> \
+python runners/01_deploy_endpoint.py --image-uri <ecr> \
     --model-data <s3-model> --instance-type ml.g5.xlarge
 
 # Deploy async (1M-row capable)
-python notebooks/01_deploy_endpoint.py --image-uri <ecr> \
+python runners/01_deploy_endpoint.py --image-uri <ecr> \
     --model-data <s3-model> --instance-type ml.g5.xlarge \
     --mode async --async-output-bucket <bucket>
 
 # Cross-instance benchmark (GPU)
-python notebooks/02_benchmark.py --image-uri <ecr> \
+python runners/02_benchmark.py --image-uri <ecr> \
     --model-data <s3-model> \
     --instance-types ml.g5.xlarge,ml.g6e.xlarge
 
 # Tear everything down
-python notebooks/03_cleanup.py --region us-east-1
+python runners/03_cleanup.py --region us-east-1
 ```
 
 Total cost across all P1 + P2.1 + LP.7 verification work: **~$7 of g5/c6i hours**

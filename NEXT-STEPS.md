@@ -40,9 +40,13 @@ Status legend: `[ ]` open · `[x]` done · `[~]` partial
   help.
 
 ### Polish backlog
-- [ ] **P3.6** — Notebook walkthrough: convert `notebooks/01_deploy_endpoint.py`
-  into an actual `.ipynb` so people skimming GitHub can read the flow without
-  cloning. Same for `02_benchmark.py`.
+- [~] **P3.6** — Notebook walkthrough. **Won't do.** Considered converting
+  the `runners/` scripts to `.ipynb`. Decided against: the `.py` files
+  already render fine on GitHub, are short and well-commented, and stay
+  CLI-runnable. Notebooks would either drift from the scripts (dual
+  maintenance) or be empty shells that obscure structure under JSON. The
+  `runners/` rename (was `notebooks/`) reflects what they actually are —
+  operational entry points, not narrative walkthroughs.
 - [x] **P3.7** — CI on GitHub Actions. **Done 2026-05-14**. `.github/workflows/ci.yml`
   AST-parses every Python file then runs `ruff check`. `pyproject.toml` holds
   the lint config (E402 silenced in `inference.py` only, since the
@@ -77,16 +81,9 @@ Status legend: `[ ]` open · `[x]` done · `[~]` partial
   `WIRE_BYTES` env vars on the model. Live-verified.
 
 ### Deferred
-- [ ] **LP.3** — Cross-region demo on us-west-2 where g7e.xlarge / p5.xlarge
-  are listed. Would unlock the original 3-tier benchmark (A10G / L40S /
-  Blackwell or H100).
 - [ ] **LP.4** — Fine-tuning recipe demo. The whole reason we ship weights via
   S3 is to support custom checkpoints; show that path. Take a public dataset,
   fine-tune V3, repackage as `model.tar.gz`, deploy on the same image.
-- [ ] **LP.5** — Streaming response endpoint. `predict_proba` could stream
-  per-row probabilities for very large test sets. SageMaker
-  `InvokeEndpointWithResponseStream` is the API; needs a different
-  `output_fn` shape.
 - [ ] **LP.6** — Multi-model endpoint. Host multiple fine-tuned variants on
   one endpoint with model selection per-request. Reduces per-variant idle
   cost.
