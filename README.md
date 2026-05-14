@@ -5,7 +5,6 @@
 > - **TabPFN-3** is a transformer-based tabular foundation model that runs entirely in-context: hand it `X_train`, `y_train`, `X_test` in one forward pass and get predictions back. No training step, no per-dataset model.
 > - **One million training rows in ~11 s end-to-end** on a single `ml.g5.xlarge` (A10G, ~$1.41/hr) via async inference + `SUBSAMPLE_SAMPLES=10000`. Predict latency stays at ~3 s from 10k to 1M rows; peak VRAM stays at 0.6 GB.
 > - **Beats XGBoost on 5 of 6** sklearn/OpenML datasets out of the box. Hits **ROC-AUC 1.0000** on `creditcardfraud` anomaly detection.
-> - **Use GPU.** CPU serving works but is ~12× slower and ~49× more expensive per inference at N=10k.
 > - **NPZ over JSON** for any payload past 1k rows — 5–9× more cells per byte under the realtime 6 MB body cap.
 
 If you've spent any time on tabular ML, you know the rhythm: pick a problem, engineer features, sweep XGBoost or LightGBM, repeat. The base assumption — that every dataset gets its own bespoke model trained from scratch — has held for over a decade. Prior Labs' [TabPFN-3](https://github.com/PriorLabs/TabPFN) is the first model we've found that genuinely breaks that assumption, and the results are weird enough to warrant a careful look.
