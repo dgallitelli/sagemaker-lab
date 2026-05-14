@@ -33,9 +33,13 @@ Status legend: `[ ]` open · `[x]` done · `[~]` partial
 - [x] **P3.4** — Per-request `ignore_pretraining_limits` flag (done in P1.2).
 
 ### Polish backlog
-- [ ] **P3.5** — Add a `results/` directory with the JSON outputs from the P1
-  probe runs (subsample-ensemble table, async sweep, CPU sweep). Useful for
-  reproducibility / regression tracking.
+- [ ] **P3.3** — Pin requirements.txt with hashes via `pip-compile`. **Done
+  2026-05-14** — `requirements.txt` now contains the full pinned closure with
+  SHA hashes; source-of-truth is `requirements.in`. Re-run with
+  `pip-compile --generate-hashes --allow-unsafe -o requirements.txt requirements.in`.
+- [~] **P3.5** — Won't do unless someone asks. RESULTS.md captures the same
+  numbers in narrative form; JSON dumps would go stale faster than they'd
+  help.
 - [ ] **P3.6** — Notebook walkthrough: convert `notebooks/01_deploy_endpoint.py`
   into an actual `.ipynb` so people skimming GitHub can read the flow without
   cloning. Same for `02_benchmark.py`.
@@ -52,10 +56,23 @@ Status legend: `[ ]` open · `[x]` done · `[~]` partial
 
 ## Lower priority / future ideas
 
-- [ ] **LP.1** — Track `pytorch-inference:2.7` DLC when it ships. Currently
-  on `2.6.0-{gpu,cpu}-py312-ubuntu22.04-sagemaker`.
-- [ ] **LP.2** — Re-evaluate tabpfn pin as PriorLabs ships fixes (currently
-  `8.0.2`).
+- [x] **LP.1** — Track `pytorch-inference:2.7` DLC. **Checked 2026-05-14** —
+  no 2.7 inference DLC published in us-east-1 yet; still on 2.6.0. Re-check
+  in a few weeks.
+- [x] **LP.2** — Re-evaluate tabpfn pin. **Checked 2026-05-14** — 8.0.2 is
+  still the latest on PyPI. Pin holds.
+- [x] **LP.7** — Async with scale-to-zero. **Done 2026-05-14**. Wired
+  `--scale-to-zero` in `01_deploy_endpoint.py` with target-tracking +
+  step-scaling on `HasBacklogWithoutCapacity`. Live-verified scale-down at
+  13 min idle and wake-from-zero at ~10 min total. See RESULTS.md "Async
+  with scale-to-zero".
+- [x] **LP.8** — Per-request payload validation in `input_fn`. **Done
+  2026-05-14**. `_validate_shapes` rejects pathological inputs (shape
+  mismatch, empty, oversize, too many features) with clear messages. Limits
+  configurable via `TABPFN_MAX_TRAIN_ROWS`/`TEST_ROWS`/`FEATURES`/
+  `WIRE_BYTES` env vars on the model. Live-verified.
+
+### Deferred
 - [ ] **LP.3** — Cross-region demo on us-west-2 where g7e.xlarge / p5.xlarge
   are listed. Would unlock the original 3-tier benchmark (A10G / L40S /
   Blackwell or H100).
@@ -69,12 +86,6 @@ Status legend: `[ ]` open · `[x]` done · `[~]` partial
 - [ ] **LP.6** — Multi-model endpoint. Host multiple fine-tuned variants on
   one endpoint with model selection per-request. Reduces per-variant idle
   cost.
-- [ ] **LP.7** — Async with scale-to-zero (`MinCapacity=0`) + autoscaling
-  policy on `HasBacklogWithoutCapacity`. The P2.1 work deployed an async
-  endpoint at fixed capacity 1 — extending to true scale-to-zero is a
-  separate config change with cold-start implications.
-- [ ] **LP.8** — Per-request payload validation in `input_fn` (max rows /
-  cells / wire size) so misconfigured clients get 400s instead of OOMs.
 - [ ] **LP.9** — Test on Graviton (`ml.c7g.*`). The CPU image is x86 only;
   building an arm64 variant would let us test the cheaper instance class.
   Likely a non-trivial cost lever for batch inference workloads.

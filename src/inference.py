@@ -78,6 +78,18 @@ NPZ_CT = "application/x-npz"
 V3_CLASSIFIER_CKPT = "tabpfn-v3-classifier-v3_default.ckpt"
 V3_REGRESSOR_CKPT = "tabpfn-v3-regressor-v3_default.ckpt"
 
+# Payload guardrails. These are deliberately generous — TabPFN's V3 default
+# checkpoint has no row cap (live-tested to 1M rows on async), so the only
+# point of these limits is to bounce obviously-misconfigured payloads with a
+# clear error message instead of letting the model OOM the GPU. Tune the
+# `MAX_TRAIN_ROWS` ceiling per instance: A10G 24 GB OOMs around 1.3M rows
+# vanilla; with SUBSAMPLE_SAMPLES=10000 the model is bounded by subsample
+# size, so 5M is a safe ceiling on g5/g6e.
+MAX_TRAIN_ROWS = int(os.environ.get("TABPFN_MAX_TRAIN_ROWS", "5000000"))
+MAX_TEST_ROWS = int(os.environ.get("TABPFN_MAX_TEST_ROWS", "100000"))
+MAX_FEATURES = int(os.environ.get("TABPFN_MAX_FEATURES", "2000"))  # V2.5 cap; V3 likely higher
+MAX_WIRE_BYTES = int(os.environ.get("TABPFN_MAX_WIRE_BYTES", str(1 * 1024 * 1024 * 1024)))  # 1 GB
+
 
 def log_gpu_memory(stage: str = "") -> dict[str, float]:
     if not torch.cuda.is_available():
@@ -163,6 +175,49 @@ def _validate_payload(task: str, payload_keys) -> None:
             raise ValueError(f"payload must include X_train, y_train, X_test (missing {k})")
 
 
+def _validate_shapes(X_train, y_train, X_test) -> None:
+    """Bounce obviously-misconfigured payloads early with a clear error.
+
+    The intent isn't to second-guess TabPFN's actual capabilities — it's to
+    stop pathological inputs from reaching the GPU and OOMing the worker.
+    Limits configurable via TABPFN_MAX_* env vars in model_fn.
+    """
+    n_train = X_train.shape[0]
+    n_test = X_test.shape[0]
+    n_features_train = X_train.shape[1] if X_train.ndim == 2 else 1
+    n_features_test = X_test.shape[1] if X_test.ndim == 2 else 1
+
+    if n_train == 0:
+        raise ValueError("X_train has 0 rows")
+    if n_test == 0:
+        raise ValueError("X_test has 0 rows")
+    if n_train != y_train.shape[0]:
+        raise ValueError(
+            f"X_train and y_train row counts must match: "
+            f"{n_train} vs {y_train.shape[0]}"
+        )
+    if n_features_train != n_features_test:
+        raise ValueError(
+            f"X_train and X_test feature counts must match: "
+            f"{n_features_train} vs {n_features_test}"
+        )
+    if n_train > MAX_TRAIN_ROWS:
+        raise ValueError(
+            f"X_train has {n_train:,} rows; max is {MAX_TRAIN_ROWS:,}. "
+            f"Override with the TABPFN_MAX_TRAIN_ROWS env var on the model."
+        )
+    if n_test > MAX_TEST_ROWS:
+        raise ValueError(
+            f"X_test has {n_test:,} rows; max is {MAX_TEST_ROWS:,}. "
+            f"Override with the TABPFN_MAX_TEST_ROWS env var on the model."
+        )
+    if n_features_train > MAX_FEATURES:
+        raise ValueError(
+            f"X has {n_features_train} features; max is {MAX_FEATURES}. "
+            f"Override with the TABPFN_MAX_FEATURES env var on the model."
+        )
+
+
 def _coerce_x(raw: Any):
     """Convert payload feature data into a TabPFN-compatible array or DataFrame.
 
@@ -187,17 +242,29 @@ def _coerce_x(raw: Any):
 def input_fn(request_body: str | bytes, content_type: str = JSON_CT) -> dict[str, Any]:
     # SageMaker passes str for text content types and bytes for binary; normalise.
     raw = request_body.encode() if isinstance(request_body, str) else request_body
+
+    # Cheap early reject: bounce wire-size violators before paying for parse.
+    if len(raw) > MAX_WIRE_BYTES:
+        raise ValueError(
+            f"Request body is {len(raw):,} bytes; max is {MAX_WIRE_BYTES:,}. "
+            f"Override with the TABPFN_MAX_WIRE_BYTES env var on the model."
+        )
+
     raw, content_type = _maybe_gunzip(raw, content_type)
 
     if content_type == JSON_CT:
         payload = json.loads(raw)
         task = payload.get("task", "classification")
         _validate_payload(task, payload.keys())
+        X_train = _coerce_x(payload["X_train"])
+        y_train = np.asarray(payload["y_train"])
+        X_test = _coerce_x(payload["X_test"])
+        _validate_shapes(X_train, y_train, X_test)
         return {
             "task": task,
-            "X_train": _coerce_x(payload["X_train"]),
-            "y_train": np.asarray(payload["y_train"]),
-            "X_test": _coerce_x(payload["X_test"]),
+            "X_train": X_train,
+            "y_train": y_train,
+            "X_test": X_test,
             "feature_names": payload.get("feature_names"),
             "return_probabilities": bool(payload.get("return_probabilities", False)),
             "ignore_pretraining_limits": bool(payload.get("ignore_pretraining_limits", False)),
@@ -216,11 +283,15 @@ def input_fn(request_body: str | bytes, content_type: str = JSON_CT) -> dict[str
                 keys.discard("meta")
             task = meta.get("task", "classification")
             _validate_payload(task, keys)
+            X_train = _coerce_x(archive["X_train"])
+            y_train = np.asarray(archive["y_train"])
+            X_test = _coerce_x(archive["X_test"])
+            _validate_shapes(X_train, y_train, X_test)
             return {
                 "task": task,
-                "X_train": _coerce_x(archive["X_train"]),
-                "y_train": np.asarray(archive["y_train"]),
-                "X_test": _coerce_x(archive["X_test"]),
+                "X_train": X_train,
+                "y_train": y_train,
+                "X_test": X_test,
                 "feature_names": meta.get("feature_names"),
                 "return_probabilities": bool(meta.get("return_probabilities", False)),
                 "ignore_pretraining_limits": bool(meta.get("ignore_pretraining_limits", False)),

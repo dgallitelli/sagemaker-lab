@@ -175,6 +175,36 @@ env = {
 }
 ```
 
+### Async with scale-to-zero — wake-from-zero is ~10 minutes
+
+Live-tested with `--scale-to-zero --scale-min 0 --scale-max 2 --scale-down-after 300` (5 min idle window). Two autoscaling policies are wired together:
+
+1. **Target-tracking** on `ApproximateBacklogSizePerInstance` (target=1) — handles steady-state load.
+2. **Step-scaling** on the `HasBacklogWithoutCapacity` CloudWatch alarm — wakes the endpoint from `MinCapacity=0` when the first request lands. Without this, a scaled-to-zero endpoint never wakes on its own; target-tracking only acts on per-instance metrics, which require ≥1 instance.
+
+Verified timeline (g5.xlarge, the image we have today):
+
+| Event | Wall clock |
+|---|---|
+| Last invocation served | t=0 |
+| Target-tracking fires `DesiredInstanceCount=0` | t≈13 min (300s idle window + 8 min target-tracking baseline latency) |
+| Instance terminates | within 10 s of scale-in |
+| New invocation queued (from zero) | t' = 0 |
+| `HasBacklogWithoutCapacity` alarm fires | ~2 min |
+| Instance provisioned, image pulled, container starts | ~6 min |
+| Model loads, healthcheck passes, request served | **~10 min total** |
+
+The 10-min wake-from-zero is dominated by ECR image pull (8.5 GB) and `model.tar.gz` download (1.6 GB), then ~2 min for the V3 weights to load on GPU. Halving image size (e.g. trimming the DLC) would cut this meaningfully; image size is the lever.
+
+**When scale-to-zero is the right call:**
+- Sporadic traffic — a few requests per day or per hour. Idle GPU cost ($1.41/hr × 24h = $34/day) >> wake-from-zero penalty.
+- Async-only (sync endpoints can't have `MinCapacity=0`).
+- Caller can tolerate a 10-min first-request latency.
+
+**When to keep `MinCapacity=1`:**
+- Steady traffic.
+- Interactive demos where 10-min cold-starts would be embarrassing.
+
 ### Async vs realtime
 
 | Aspect | Realtime | Async |
@@ -359,6 +389,18 @@ the same image and `model.tar.gz`. Route client-side based on payload size.
 Saw `InsufficientInstanceCapacity` after 30 min wait twice. `g5.xlarge`
 deploys consistently in 5-7 min. The benchmark deploy script now has
 capacity-aware fallback.
+
+### G8 — `MinCapacity=0` async endpoints don't wake without a step-scaling policy
+
+Target-tracking autoscaling acts on **per-instance metrics**
+(`ApproximateBacklogSizePerInstance`), which are undefined when there are
+zero instances. So a scaled-to-zero endpoint with only a target-tracking
+policy will never wake — backlog accumulates forever.
+
+**Fix**: also attach a step-scaling policy on the `HasBacklogWithoutCapacity`
+CloudWatch alarm. That alarm goes off as soon as the queue has work and no
+capacity to serve it, regardless of how many instances exist. The deploy
+script's `--scale-to-zero` flag wires both policies automatically.
 
 ---
 

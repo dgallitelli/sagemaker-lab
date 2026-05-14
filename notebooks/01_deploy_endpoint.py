@@ -86,6 +86,89 @@ def _smoke_realtime(predictor) -> None:
     _print_smoke_results(response, y_test)
 
 
+def _register_scale_to_zero(endpoint_name: str, region: str, *,
+                            min_capacity: int = 0, max_capacity: int = 2,
+                            scale_down_after_s: int = 900) -> None:
+    """Attach autoscaling to an async endpoint so it scales to zero when idle.
+
+    Two policies wired up:
+    1. Target-tracking on ApproximateBacklogSizePerInstance to scale up under
+       load (target = 1; one queued item per instance triggers scale-up).
+    2. Step-scaling on the HasBacklogWithoutCapacity CloudWatch alarm so the
+       endpoint wakes from MinCapacity=0 the moment a request is queued.
+       Without this, MinCapacity=0 endpoints would never wake on their own.
+    """
+    aas = boto3.client("application-autoscaling", region_name=region)
+    cw = boto3.client("cloudwatch", region_name=region)
+    resource_id = f"endpoint/{endpoint_name}/variant/AllTraffic"
+    scalable_dim = "sagemaker:variant:DesiredInstanceCount"
+    namespace = "sagemaker"
+
+    print(f"\nRegistering autoscaling: min={min_capacity} max={max_capacity}")
+    aas.register_scalable_target(
+        ServiceNamespace=namespace,
+        ResourceId=resource_id,
+        ScalableDimension=scalable_dim,
+        MinCapacity=min_capacity,
+        MaxCapacity=max_capacity,
+    )
+
+    # 1. Target-tracking on backlog size — handles steady-state load.
+    aas.put_scaling_policy(
+        PolicyName=f"{endpoint_name}-backlog-target",
+        ServiceNamespace=namespace,
+        ResourceId=resource_id,
+        ScalableDimension=scalable_dim,
+        PolicyType="TargetTrackingScaling",
+        TargetTrackingScalingPolicyConfiguration={
+            "TargetValue": 1.0,
+            "CustomizedMetricSpecification": {
+                "MetricName": "ApproximateBacklogSizePerInstance",
+                "Namespace": "AWS/SageMaker",
+                "Dimensions": [{"Name": "EndpointName", "Value": endpoint_name}],
+                "Statistic": "Average",
+            },
+            "ScaleInCooldown": scale_down_after_s,
+            "ScaleOutCooldown": 60,
+        },
+    )
+    print(f"  + target-tracking on ApproximateBacklogSizePerInstance (target=1)")
+
+    # 2. Step-scaling on HasBacklogWithoutCapacity — wakes from zero.
+    step_policy_name = f"{endpoint_name}-wake-from-zero"
+    step_resp = aas.put_scaling_policy(
+        PolicyName=step_policy_name,
+        ServiceNamespace=namespace,
+        ResourceId=resource_id,
+        ScalableDimension=scalable_dim,
+        PolicyType="StepScaling",
+        StepScalingPolicyConfiguration={
+            "AdjustmentType": "ChangeInCapacity",
+            "Cooldown": 60,
+            "MetricAggregationType": "Maximum",
+            "StepAdjustments": [
+                {"MetricIntervalLowerBound": 0, "ScalingAdjustment": 1},
+            ],
+        },
+    )
+    cw.put_metric_alarm(
+        AlarmName=f"{endpoint_name}-HasBacklogWithoutCapacity",
+        MetricName="HasBacklogWithoutCapacity",
+        Namespace="AWS/SageMaker",
+        Statistic="Average",
+        Dimensions=[{"Name": "EndpointName", "Value": endpoint_name}],
+        EvaluationPeriods=2,
+        DatapointsToAlarm=2,
+        Threshold=1,
+        ComparisonOperator="GreaterThanOrEqualToThreshold",
+        TreatMissingData="missing",
+        Period=60,
+        AlarmActions=[step_resp["PolicyARN"]],
+    )
+    print(f"  + step-scaling alarm HasBacklogWithoutCapacity → +1 instance")
+    print(f"  scale-down idle window: {scale_down_after_s}s")
+
+
 def _smoke_async(endpoint_name: str, region: str, output_bucket: str,
                  input_prefix: str = "tabpfn3/async/inputs") -> None:
     """Upload payload to S3, call InvokeEndpointAsync, poll the result URI."""
@@ -161,10 +244,24 @@ def main() -> int:
                         help="S3 key prefix for async output objects")
     parser.add_argument("--async-max-concurrent", type=int, default=4,
                         help="MaxConcurrentInvocationsPerInstance for async")
+    parser.add_argument("--scale-to-zero", action="store_true",
+                        help="(async only) Register autoscaling with MinCapacity=0 "
+                             "so the endpoint scales down when idle. Adds a "
+                             "step-scaling policy on HasBacklogWithoutCapacity "
+                             "to wake from zero on the first queued request.")
+    parser.add_argument("--scale-min", type=int, default=0,
+                        help="MinCapacity for autoscaling (default 0)")
+    parser.add_argument("--scale-max", type=int, default=2,
+                        help="MaxCapacity for autoscaling (default 2)")
+    parser.add_argument("--scale-down-after", type=int, default=900,
+                        help="Seconds of idle before scaling to zero (default 900)")
     args = parser.parse_args()
 
     if args.mode == "async" and not args.async_output_bucket:
         parser.error("--async-output-bucket is required with --mode async")
+    if args.scale_to_zero and args.mode != "async":
+        parser.error("--scale-to-zero requires --mode async (realtime endpoints "
+                     "do not support MinCapacity=0)")
 
     sm_session = sagemaker.Session()
     role = args.role or sagemaker.get_execution_role(sm_session)
@@ -229,6 +326,14 @@ def main() -> int:
     t0 = time.time()
     predictor = model.deploy(**deploy_kwargs)
     print(f"Endpoint InService after {time.time() - t0:.1f}s.")
+
+    if args.scale_to_zero:
+        _register_scale_to_zero(
+            endpoint_name, args.region,
+            min_capacity=args.scale_min,
+            max_capacity=args.scale_max,
+            scale_down_after_s=args.scale_down_after,
+        )
 
     if args.skip_smoke_test:
         print(f"\nENDPOINT_NAME={endpoint_name}")
