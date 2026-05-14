@@ -21,10 +21,76 @@ from typing import Any
 
 import numpy as np
 
-
 JSON_CT = "application/json"
 JSON_GZIP_CT = "application/x-json-gzip"
 NPZ_CT = "application/x-npz"
+
+# Valid InferenceConfig field names, snapshotted from tabpfn==8.0.2's
+# `tabpfn/inference_config.py`. The server-side InferenceConfig is a
+# dataclass with `extra="forbid"` semantics — any unknown key triggers a
+# Pydantic ValidationError that surfaces as a 500 from the model server.
+# Use validate_inference_config() client-side to fail fast and locally.
+# When upgrading tabpfn, regenerate via:
+#   python -c "from tabpfn.inference_config import InferenceConfig
+#              import dataclasses
+#              for f in dataclasses.fields(InferenceConfig):
+#                  if not f.name.startswith('_'): print(repr(f.name) + ',')"
+_INFERENCE_CONFIG_FIELDS = frozenset({
+    "PREPROCESS_TRANSFORMS",
+    "MAX_UNIQUE_FOR_CATEGORICAL_FEATURES",
+    "MIN_UNIQUE_FOR_NUMERICAL_FEATURES",
+    "MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE",
+    "OUTLIER_REMOVAL_STD",
+    "FEATURE_SHIFT_METHOD",
+    "CLASS_SHIFT_METHOD",
+    "FINGERPRINT_FEATURE",
+    "POLYNOMIAL_FEATURES",
+    "SUBSAMPLE_SAMPLES",
+    "ENABLE_GPU_PREPROCESSING",
+    "FEATURE_SUBSAMPLING_METHOD",
+    "FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT",
+    "FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT",
+    "REGRESSION_Y_PREPROCESS_TRANSFORMS",
+    "USE_SKLEARN_16_DECIMAL_PRECISION",
+    "MAX_NUMBER_OF_CLASSES",
+    "MAX_NUMBER_OF_FEATURES",
+    "MAX_NUMBER_OF_SAMPLES",
+    "FIX_NAN_BORDERS_AFTER_TARGET_TRANSFORM",
+})
+
+
+def validate_inference_config(cfg: dict[str, Any] | None) -> None:
+    """Reject typo'd InferenceConfig keys before sending to the endpoint.
+
+    The server-side InferenceConfig has `extra="forbid"`, so an unknown key
+    crashes the model server with a 500. This local check catches typos
+    early with a clean Python TypeError.
+
+    Raises:
+        TypeError: if cfg is not a dict (when not None).
+        ValueError: if cfg contains keys outside the canonical
+            InferenceConfig field set, with a `did_you_mean` suggestion.
+    """
+    if cfg is None:
+        return
+    if not isinstance(cfg, dict):
+        raise TypeError(f"inference_config must be a dict or None, got {type(cfg).__name__}")
+    unknown = set(cfg) - _INFERENCE_CONFIG_FIELDS
+    if not unknown:
+        return
+
+    import difflib
+    msgs = []
+    for key in sorted(unknown):
+        suggestion = difflib.get_close_matches(key, _INFERENCE_CONFIG_FIELDS, n=1, cutoff=0.6)
+        if suggestion:
+            msgs.append(f"{key!r} (did you mean {suggestion[0]!r}?)")
+        else:
+            msgs.append(repr(key))
+    raise ValueError(
+        f"inference_config contains unknown keys: {', '.join(msgs)}. "
+        f"Valid keys: {sorted(_INFERENCE_CONFIG_FIELDS)}"
+    )
 
 
 def encode_json(payload: dict[str, Any], gzip_body: bool = False) -> tuple[bytes, str, str | None]:
@@ -33,7 +99,11 @@ def encode_json(payload: dict[str, Any], gzip_body: bool = False) -> tuple[bytes
     When gzip_body=True we return Content-Type=application/x-json-gzip so the
     SageMaker toolkit doesn't pre-decode the bytes to UTF-8 (which corrupts the
     gzip stream). The container's input_fn handles the gunzip explicitly.
+
+    Validates `payload["inference_config"]` client-side, so typo'd keys raise
+    a local ValueError instead of a 500 from the model server.
     """
+    validate_inference_config(payload.get("inference_config"))
     raw = json.dumps(payload).encode()
     if gzip_body:
         return gzip.compress(raw), JSON_GZIP_CT, "gzip"
@@ -57,6 +127,7 @@ def encode_npz(
 
     For mixed numeric+text data, use `encode_npz_mixed` instead.
     """
+    validate_inference_config(inference_config)
     meta: dict[str, Any] = {"task": task, "return_probabilities": return_probabilities}
     if feature_names is not None:
         meta["feature_names"] = feature_names
@@ -98,6 +169,7 @@ def encode_npz_mixed(
 
     Inference: ~10× smaller wire than column-dict JSON for the same data.
     """
+    validate_inference_config(inference_config)
     import pandas as pd
 
     def _to_object_2d(x):

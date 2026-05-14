@@ -20,7 +20,9 @@ Content-Encoding: gzip):
         "feature_names": [...],                # optional
         "return_probabilities": false,         # classification only
         "ignore_pretraining_limits": false,    # opt-in past V3 caps
-        "inference_config": {...}              # e.g. {"SUBSAMPLE_SAMPLES": 10000}
+        "inference_config": {...},             # e.g. {"SUBSAMPLE_SAMPLES": 10000}
+        "n_estimators": 8,                     # constructor override; lower=faster
+        "softmax_temperature": 0.9             # classifier only
       }
 
   application/x-npz
@@ -39,6 +41,7 @@ from __future__ import annotations
 # pydantic-settings, which captures env at import time — assigning os.environ
 # afterwards has no effect.
 import os
+
 _MODEL_DIR_HINT = os.environ.get("SM_MODEL_DIR", "/opt/ml/model")
 _TABPFN_CACHE_DIR = os.path.join(_MODEL_DIR_HINT, "tabpfn_cache")
 if os.path.isdir(_TABPFN_CACHE_DIR):
@@ -61,7 +64,6 @@ from typing import Any
 
 import numpy as np
 import torch
-
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 
 logger = logging.getLogger(__name__)
@@ -162,7 +164,7 @@ def _maybe_gunzip(body: bytes, content_type: str) -> tuple[bytes, str]:
     if content_type == JSON_GZIP_CT:
         return gzip.decompress(body), JSON_CT
     # Fallback: sniff gzip magic on bytes payloads (e.g. raw gzipped NPZ).
-    if isinstance(body, (bytes, bytearray)) and len(body) >= 2 and body[:2] == b"\x1f\x8b":
+    if isinstance(body, bytes | bytearray) and len(body) >= 2 and body[:2] == b"\x1f\x8b":
         return gzip.decompress(body), content_type
     return body, content_type
 
@@ -269,6 +271,8 @@ def input_fn(request_body: str | bytes, content_type: str = JSON_CT) -> dict[str
             "return_probabilities": bool(payload.get("return_probabilities", False)),
             "ignore_pretraining_limits": bool(payload.get("ignore_pretraining_limits", False)),
             "inference_config": payload.get("inference_config"),
+            "n_estimators": payload.get("n_estimators"),
+            "softmax_temperature": payload.get("softmax_temperature"),
         }
 
     if content_type == NPZ_CT:
@@ -296,6 +300,8 @@ def input_fn(request_body: str | bytes, content_type: str = JSON_CT) -> dict[str
                 "return_probabilities": bool(meta.get("return_probabilities", False)),
                 "ignore_pretraining_limits": bool(meta.get("ignore_pretraining_limits", False)),
                 "inference_config": meta.get("inference_config"),
+                "n_estimators": meta.get("n_estimators"),
+                "softmax_temperature": meta.get("softmax_temperature"),
             }
 
     raise ValueError(f"Unsupported content type: {content_type!r}")
@@ -309,12 +315,29 @@ def _maybe_per_request_model(
     Building a fresh estimator every request is cheap (no weights load, just a
     Python wrapper); the actual checkpoint is shared via the underlying
     PyTorch module cache. We rebuild only when the request asks for overrides.
+
+    Per-request constructor overrides supported:
+      - ignore_pretraining_limits: bool
+      - inference_config: dict (forwarded to InferenceConfig; Pydantic
+        rejects unknown keys with a 500, so use validate_inference_config
+        client-side)
+      - n_estimators: int  (default 8; lower for faster requests)
+      - softmax_temperature: float  (classifier only; default 0.9)
     """
     overrides = {}
     if data.get("ignore_pretraining_limits"):
         overrides["ignore_pretraining_limits"] = True
     if data.get("inference_config"):
         overrides["inference_config"] = data["inference_config"]
+    if data.get("n_estimators") is not None:
+        n_est = data["n_estimators"]
+        if not isinstance(n_est, int) or n_est < 1:
+            raise ValueError(f"n_estimators must be a positive int, got {n_est!r}")
+        overrides["n_estimators"] = n_est
+    if data.get("softmax_temperature") is not None:
+        if task != "classification":
+            raise ValueError("softmax_temperature is only valid for classification")
+        overrides["softmax_temperature"] = float(data["softmax_temperature"])
     if not overrides:
         return base_model
 

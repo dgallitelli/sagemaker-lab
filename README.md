@@ -94,9 +94,17 @@ tabpfn3-sagemaker-experiments/
   "feature_names": [...],              // optional
   "return_probabilities": false,       // classification only
   "ignore_pretraining_limits": false,  // opt-in past V3 caps
-  "inference_config": null             // e.g. {"SUBSAMPLE_SAMPLES": 10000}
+  "inference_config": null,            // e.g. {"SUBSAMPLE_SAMPLES": 10000}
+  "n_estimators": 8,                   // ensemble size; lower = faster
+  "softmax_temperature": 0.9           // classifier-only probability scaling
 }
 ```
+
+`inference_config` keys are validated server-side with Pydantic
+`extra="forbid"` — typos return 500. Use
+`client_helpers.validate_inference_config()` (auto-invoked from
+`encode_json`/`encode_npz`/`encode_npz_mixed`) to fail fast with a `did
+you mean` suggestion.
 
 Response:
 

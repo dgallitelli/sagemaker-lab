@@ -41,10 +41,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import sagemaker
+from sagemaker.deserializers import JSONDeserializer
 from sagemaker.predictor import Predictor
 from sagemaker.pytorch import PyTorchModel
 from sagemaker.serializers import JSONSerializer
-from sagemaker.deserializers import JSONDeserializer
 from sklearn.datasets import (
     fetch_california_housing,
     fetch_openml,
@@ -66,7 +66,6 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OrdinalEncoder
 from xgboost import XGBClassifier, XGBRegressor
-
 
 DEFAULT_SIZES = [1_000, 10_000, 100_000]
 N_FEATURES = 32
@@ -155,7 +154,7 @@ def _subsample(X: np.ndarray, y: np.ndarray, n: int, *,
     take = (proportions * n).astype(int)
     take[-1] = n - take[:-1].sum()  # adjust for rounding
     chunks: list[int] = []
-    for cls, k in zip(classes, take):
+    for cls, k in zip(classes, take, strict=False):
         cls_idx = np.where(stratify == cls)[0]
         chunks.extend(rng.choice(cls_idx, size=min(k, len(cls_idx)), replace=False))
     chunks_arr = np.asarray(chunks)

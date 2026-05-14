@@ -1,7 +1,7 @@
 # TabPFN-3 SageMaker Demo — Roadmap
 
 Last updated 2026-05-14 after the P1 probe round, P2.1/P2.2 verification,
-and the LP.1/LP.2/LP.7/LP.8 + P3.3 round.
+the LP.1/LP.2/LP.7/LP.8 + P3.3 round, and the P3.7/P3.8/P3.9 round.
 **Completed work is in [RESULTS.md](RESULTS.md).** This file lists what's
 left.
 
@@ -43,16 +43,20 @@ Status legend: `[ ]` open · `[x]` done · `[~]` partial
 - [ ] **P3.6** — Notebook walkthrough: convert `notebooks/01_deploy_endpoint.py`
   into an actual `.ipynb` so people skimming GitHub can read the flow without
   cloning. Same for `02_benchmark.py`.
-- [ ] **P3.7** — Add CI: `python -c "import ast; ast.parse(...)"` on every
-  Python file, plus a black/ruff lint pass. Cheap insurance against typos.
-- [ ] **P3.8** — Add per-request `n_estimators` override. P1.3 found that
-  `inference_config` is Pydantic `extra="forbid"` so unknown keys crash, and
-  `n_estimators` is a constructor arg, not an InferenceConfig field. Wire it
-  as a separate top-level payload key.
-- [ ] **P3.9** — Client-side `inference_config` schema validation. Pydantic
-  rejects typos with a 500; surface that as a 400 (or, better, validate
-  client-side before invoke). Could ship a tiny `validate_inference_config()`
-  in `client_helpers.py`.
+- [x] **P3.7** — CI on GitHub Actions. **Done 2026-05-14**. `.github/workflows/ci.yml`
+  AST-parses every Python file then runs `ruff check`. `pyproject.toml` holds
+  the lint config (E402 silenced in `inference.py` only, since the
+  env-var-before-import pattern is intentional per Gotcha G3).
+- [x] **P3.8** — Per-request `n_estimators` and `softmax_temperature` overrides.
+  **Done 2026-05-14**. Both flow through `input_fn` and `_maybe_per_request_model`;
+  bad values (non-positive int, softmax on regression) raise `ValueError`.
+  Live-verified — `predict_seconds` scales sub-linearly with `n_estimators`
+  (0.5s @ n=4, 1.0s @ n=8, 1.9s @ n=16).
+- [x] **P3.9** — `validate_inference_config()` in `client_helpers.py`. **Done
+  2026-05-14**. Frozenset of canonical InferenceConfig keys snapshotted from
+  tabpfn==8.0.2; `difflib`-based "did you mean" suggestions for typos. Auto-
+  invoked from `encode_json`/`encode_npz`/`encode_npz_mixed` so any caller
+  using the helpers gets validation for free.
 
 ## Lower priority / future ideas
 

@@ -140,10 +140,21 @@ payload = {
 ### Caveats
 
 - `inference_config` is validated server-side with Pydantic `extra="forbid"`.
-  Typo'd keys → 500 from the model server. Validate client-side.
-- `n_estimators` is a constructor arg (not an `InferenceConfig` field), so
-  it's NOT tunable per-request via `inference_config`. Default 8 estimators
-  always apply.
+  Typo'd keys → 500 from the model server. The handler accepts the dict
+  as-is and forwards to TabPFN, so misspellings only surface during
+  prediction. **Use `client_helpers.validate_inference_config()`** — it
+  knows the canonical field set (snapshotted from tabpfn 8.0.2) and
+  suggests close matches via `difflib`. `encode_json`/`encode_npz`/
+  `encode_npz_mixed` invoke the validator automatically.
+- `n_estimators` is a TabPFN constructor arg, not an `InferenceConfig`
+  field, so it is **not** tunable via `inference_config`. The handler
+  accepts `n_estimators` as a top-level payload key and rebuilds the
+  estimator with the override (default 8). Live-tested: at 8 k breast_cancer
+  rows, `predict_seconds` scales as 0.61 / 0.50 / 0.97 / 1.94 s for
+  n_estimators ∈ {1, 4, 8, 16}.
+- `softmax_temperature` (classifier-only constructor arg) likewise accepted
+  as a top-level payload key. Useful for probability calibration on
+  imbalanced datasets without redeploying.
 
 ---
 

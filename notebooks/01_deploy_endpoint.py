@@ -36,12 +36,11 @@ import boto3
 import numpy as np
 import sagemaker
 from sagemaker.async_inference import AsyncInferenceConfig
+from sagemaker.deserializers import JSONDeserializer
 from sagemaker.pytorch import PyTorchModel
 from sagemaker.serializers import JSONSerializer
-from sagemaker.deserializers import JSONDeserializer
 from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
-
 
 SMOKE_PAYLOAD_SAMPLER = {
     "test_size": 0.2, "random_state": 42,
@@ -132,7 +131,7 @@ def _register_scale_to_zero(endpoint_name: str, region: str, *,
             "ScaleOutCooldown": 60,
         },
     )
-    print(f"  + target-tracking on ApproximateBacklogSizePerInstance (target=1)")
+    print("  + target-tracking on ApproximateBacklogSizePerInstance (target=1)")
 
     # 2. Step-scaling on HasBacklogWithoutCapacity — wakes from zero.
     step_policy_name = f"{endpoint_name}-wake-from-zero"
@@ -165,7 +164,7 @@ def _register_scale_to_zero(endpoint_name: str, region: str, *,
         Period=60,
         AlarmActions=[step_resp["PolicyARN"]],
     )
-    print(f"  + step-scaling alarm HasBacklogWithoutCapacity → +1 instance")
+    print("  + step-scaling alarm HasBacklogWithoutCapacity → +1 instance")
     print(f"  scale-down idle window: {scale_down_after_s}s")
 
 

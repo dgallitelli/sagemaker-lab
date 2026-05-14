@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import sys
 import time
-import traceback
 from pathlib import Path
 
 import boto3

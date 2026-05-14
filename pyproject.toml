@@ -1,0 +1,23 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long — long URLs / docstring tables make 100 too tight
+    "B008",  # function call in argparse default — fine for our scripts
+]
+
+[tool.ruff.lint.per-file-ignores]
+# inference.py deliberately sets TABPFN_* env vars BEFORE `from tabpfn import` —
+# pydantic-settings captures env at import time. Documented as Gotcha G3 in
+# RESULTS.md. The other E402 violations there are downstream of the same fix.
+"src/inference.py" = ["E402"]
