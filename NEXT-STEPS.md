@@ -1,6 +1,7 @@
 # TabPFN-3 SageMaker Demo — Roadmap
 
-Last updated 2026-05-14 after the P1 probe round + P2.1/P2.2 verification.
+Last updated 2026-05-14 after the P1 probe round, P2.1/P2.2 verification,
+and the LP.1/LP.2/LP.7/LP.8 + P3.3 round.
 **Completed work is in [RESULTS.md](RESULTS.md).** This file lists what's
 left.
 
@@ -29,17 +30,16 @@ Status legend: `[ ]` open · `[x]` done · `[~]` partial
 
 - [x] **P3.1** — README benchmark section rewritten with P1 results table.
 - [x] **P3.2** — `encode_npz_mixed` helper + "Choosing an encoding" docs.
-- [ ] **P3.3** — Pin requirements.txt with hashes (`pip-compile`).
-- [x] **P3.4** — Per-request `ignore_pretraining_limits` flag (done in P1.2).
-
-### Polish backlog
-- [ ] **P3.3** — Pin requirements.txt with hashes via `pip-compile`. **Done
+- [x] **P3.3** — Pin requirements.txt with hashes via `pip-compile`. **Done
   2026-05-14** — `requirements.txt` now contains the full pinned closure with
   SHA hashes; source-of-truth is `requirements.in`. Re-run with
   `pip-compile --generate-hashes --allow-unsafe -o requirements.txt requirements.in`.
+- [x] **P3.4** — Per-request `ignore_pretraining_limits` flag (done in P1.2).
 - [~] **P3.5** — Won't do unless someone asks. RESULTS.md captures the same
   numbers in narrative form; JSON dumps would go stale faster than they'd
   help.
+
+### Polish backlog
 - [ ] **P3.6** — Notebook walkthrough: convert `notebooks/01_deploy_endpoint.py`
   into an actual `.ipynb` so people skimming GitHub can read the flow without
   cloning. Same for `02_benchmark.py`.

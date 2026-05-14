@@ -20,6 +20,10 @@ how-to, see [README.md](README.md).
 - **The "1M-row TabPFN" claim is real**, but only via async endpoints with
   `inference_config={"SUBSAMPLE_SAMPLES": 10000}`. Verified: 1M rows × 32
   features in **11 s end-to-end** on g5.xlarge, peak GPU 0.6 GB.
+- **Async with scale-to-zero works** — `MinCapacity=0` reduces idle cost
+  to $0/hr at the cost of a **~10 minute wake-from-zero**. Requires a
+  step-scaling policy on `HasBacklogWithoutCapacity` to wake at all
+  (target-tracking alone won't, see Gotcha G8).
 - **NPZ encoding is mandatory above ~6 k rows** at 32 features for either
   endpoint mode. JSON crosses 6 MB before then.
 - **CPU serving works but is uneconomical**: ~12× slower and ~49× more
@@ -27,10 +31,12 @@ how-to, see [README.md](README.md).
 - **Mixed numeric+text data works** end-to-end if the wire format preserves
   per-column dtypes (column-dict JSON or 2-D object NPZ). Row-list of mixed
   types is broken — numpy upcasts everything to strings and TabPFN rejects.
-- **Two non-obvious gotchas** that cost us a deploy cycle each: the
-  inference toolkit only adds `/opt/ml/model/code/` to PYTHONPATH (not
-  `/opt/ml/code/`), and the SageMaker PyTorch toolkit pre-decodes
-  `application/json` bodies to UTF-8 before `input_fn` runs.
+- **Eight non-obvious gotchas** documented below; collectively they cost
+  4-5 deploy cycles to discover. Highest-impact ones: the inference
+  toolkit only adds `/opt/ml/model/code/` to PYTHONPATH (G1), the
+  SageMaker toolkit pre-decodes `application/json` bodies to UTF-8 before
+  `input_fn` runs (G2), and the DLC's TorchServe caps requests at 6.5 MB
+  even on async endpoints (G5).
 
 ---
 
@@ -407,11 +413,15 @@ script's `--scale-to-zero` flag wires both policies automatically.
 ## What we measured but didn't report here
 
 - Multi-instance comparison (g5.xlarge vs g6e.xlarge vs p5.xlarge) — code is
-  in `02_benchmark.py` but never executed across all three live. P2.2-followup.
+  in `02_benchmark.py` but never executed across all three live. Skipped
+  intentionally: at constant `predict_seconds≈3 s` from subsample-ensemble
+  on g5, a 30% L40S speedup would be in the noise. See P2.2-followup in
+  NEXT-STEPS.md.
 - Real >1M-row tabular benchmark — used `make_classification` (synthetic).
   Should be repeated on Higgs/Criteo for an external sanity check. LP.11.
-- Cold-start latency for true scale-to-zero async. Tested at fixed
-  `MinCapacity=1` only. LP.7.
+- Wake-from-zero on a smaller image. The 10-min cold-start is dominated by
+  the 8.5 GB GPU image pull. Trimming the DLC (or using the 1.6 GB CPU
+  image with a different cost story) would cut this. Not tested.
 
 ---
 
@@ -438,4 +448,5 @@ python notebooks/02_benchmark.py --image-uri <ecr> \
 python notebooks/03_cleanup.py --region us-east-1
 ```
 
-Total cost across all P1 + P2.1 verification work: **~$5 of g5/c6i hours**.
+Total cost across all P1 + P2.1 + LP.7 verification work: **~$7 of g5/c6i hours**
+across ~10 endpoint deployments.
