@@ -1,0 +1,4 @@
+task_type: tabular
+label: class
+eval_metric: roc_auc
+presets: best_quality

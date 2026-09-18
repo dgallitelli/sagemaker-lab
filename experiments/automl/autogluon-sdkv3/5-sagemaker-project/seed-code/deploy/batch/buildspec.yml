@@ -1,0 +1,32 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      # build.py imports sagemaker.core.utils.name_from_base (see its LambdaResourceNamePrefix
+      # comment), so the SDK must be installed here too — unlike realtime/build.py, which only
+      # needs boto3/botocore.
+      - pip install --upgrade --force-reinstall "botocore>1.21.30" "boto3>1.18.30" "awscli>1.20.30" "sagemaker>=3.5.0,<4.0"
+
+  build:
+    commands:
+      # CodeBuild's Source.BuildSpec path only tells it which file to read; the working
+      # directory during `commands:` is always the repo root (this repo has both realtime/
+      # and batch/ at the top level), so every path below is relative to `batch/`.
+      - cd batch
+      - python build.py --model-execution-role "$MODEL_EXECUTION_ROLE_ARN" --model-package-group-name "$SOURCE_MODEL_PACKAGE_GROUP_NAME" --sagemaker-project-id "$SAGEMAKER_PROJECT_ID" --sagemaker-project-name "$SAGEMAKER_PROJECT_NAME" --s3-bucket "$ARTIFACT_BUCKET" --export-staging-config $EXPORT_TEMPLATE_STAGING_CONFIG --export-prod-config $EXPORT_TEMPLATE_PROD_CONFIG
+      - cd lambda && zip -r ../run_transform.zip run_transform.py && cd ..
+      - aws s3 cp run_transform.zip "s3://${ARTIFACT_BUCKET}/AutoML/lambda/staging/run_transform.zip"
+      - aws s3 cp run_transform.zip "s3://${ARTIFACT_BUCKET}/AutoML/lambda/prod/run_transform.zip"
+      - aws cloudformation package --template batch-transform-template.yml --s3-bucket $ARTIFACT_BUCKET --output-template $EXPORT_TEMPLATE_NAME
+      - cat $EXPORT_TEMPLATE_STAGING_CONFIG
+      - cat $EXPORT_TEMPLATE_PROD_CONFIG
+
+artifacts:
+  base-directory: batch
+  files:
+    - $EXPORT_TEMPLATE_NAME
+    - $EXPORT_TEMPLATE_STAGING_CONFIG
+    - $EXPORT_TEMPLATE_PROD_CONFIG

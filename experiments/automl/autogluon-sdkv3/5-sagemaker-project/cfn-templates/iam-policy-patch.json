@@ -1,0 +1,51 @@
+[
+  {
+    "Sid": "BatchTransformLambdaPermission",
+    "Effect": "Allow",
+    "Action": [
+      "lambda:CreateFunction",
+      "lambda:DeleteFunction",
+      "lambda:GetFunction",
+      "lambda:UpdateFunctionCode",
+      "lambda:UpdateFunctionConfiguration",
+      "lambda:AddPermission",
+      "lambda:RemovePermission",
+      "lambda:TagResource"
+    ],
+    "Resource": "arn:aws:lambda:*:*:function:sagemaker-*"
+  },
+  {
+    "Sid": "BatchTransformEventsPermission",
+    "Effect": "Allow",
+    "Action": [
+      "events:PutRule",
+      "events:DeleteRule",
+      "events:PutTargets",
+      "events:RemoveTargets",
+      "events:DescribeRule"
+    ],
+    "Resource": "arn:aws:events:*:*:rule/sagemaker-*"
+  },
+  {
+    "Sid": "BatchTransformLambdaRolePermission",
+    "Effect": "Allow",
+    "Action": [
+      "iam:CreateRole",
+      "iam:DeleteRole",
+      "iam:PutRolePolicy",
+      "iam:DeleteRolePolicy",
+      "iam:GetRole",
+      "iam:PassRole",
+      "iam:TagRole"
+    ],
+    "Resource": "arn:aws:iam::*:role/sagemaker-*-batch-transform-lambda"
+  },
+  {
+    "Sid": "BatchTransformLambdaCodeS3Permission",
+    "Effect": "Allow",
+    "Action": [
+      "s3:GetObject"
+    ],
+    "Resource": "arn:aws:s3:::sagemaker-project-*/AutoML/lambda/*"
+  }
+]

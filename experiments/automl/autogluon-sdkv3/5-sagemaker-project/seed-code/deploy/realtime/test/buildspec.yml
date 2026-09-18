@@ -1,0 +1,18 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+  build:
+    commands:
+      # PrimarySource is SourceArtifact (full deploy repo checkout, working directory is
+      # its root), so this test script lives under realtime/test/, not test/.
+      - cd realtime
+      - python test/test.py --import-build-config $CODEBUILD_SRC_DIR_BuildArtifact/staging-config-export.json --export-test-results $EXPORT_TEST_RESULTS
+      - cat $EXPORT_TEST_RESULTS
+
+artifacts:
+  base-directory: realtime
+  files:
+    - $EXPORT_TEST_RESULTS

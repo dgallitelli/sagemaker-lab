@@ -1,0 +1,11 @@
+# Reference config for timeseries AutoML. Requires a custom preprocess.py
+# that emits long-format CSV with columns [item_id, timestamp, target] —
+# see 2-timeseries-forecasting/0-data-prep/preprocess.py in this repo for
+# an example of the wide-to-long conversion this task type needs.
+task_type: timeseries
+target: target
+id_column: item_id
+timestamp_column: timestamp
+prediction_length: 84
+eval_metric: MASE
+presets: medium_quality

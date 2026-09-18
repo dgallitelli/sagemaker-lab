@@ -1,0 +1,7 @@
+__title__ = "automl-pipelines"
+__description__ = "AutoGluon AutoML SageMaker Pipeline for SageMaker Projects CI/CD"
+__version__ = "0.1.0"
+__author__ = "AutoGluon on SageMaker SDK v3 examples"
+__author_email__ = ""
+__license__ = "MIT"
+__url__ = ""

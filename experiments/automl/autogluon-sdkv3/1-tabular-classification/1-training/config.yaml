@@ -1,0 +1,13 @@
+ag_predictor_args:
+  eval_metric: roc_auc
+  label: class
+
+ag_fit_args:
+  presets: "medium_quality"
+  num_bag_folds: 2
+  num_bag_sets: 1
+  num_stack_levels: 0
+
+output_prediction_format: csv
+feature_importance: true
+leaderboard: true

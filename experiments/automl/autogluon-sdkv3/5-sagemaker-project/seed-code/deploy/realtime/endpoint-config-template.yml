@@ -1,0 +1,61 @@
+Description: Real-time endpoint for the AutoML model package, deployed per-stage.
+Parameters:
+  SageMakerProjectName:
+    Type: String
+    MinLength: 1
+    MaxLength: 32
+    AllowedPattern: ^[a-zA-Z](-*[a-zA-Z0-9])*
+  ModelExecutionRoleArn:
+    Type: String
+  ModelPackageName:
+    Type: String
+  StageName:
+    Type: String
+  EndpointInstanceCount:
+    Type: Number
+    MinValue: 1
+  EndpointInstanceType:
+    Type: String
+  DataCaptureUploadPath:
+    Type: String
+  SamplingPercentage:
+    Type: Number
+    MinValue: 0
+    MaxValue: 100
+  EnableDataCapture:
+    Default: true
+    Type: String
+    AllowedValues: [true, false]
+
+Resources:
+  Model:
+    Type: AWS::SageMaker::Model
+    Properties:
+      Containers:
+        - ModelPackageName: !Ref ModelPackageName
+      ExecutionRoleArn: !Ref ModelExecutionRoleArn
+
+  EndpointConfig:
+    Type: AWS::SageMaker::EndpointConfig
+    Properties:
+      ProductionVariants:
+        - InitialInstanceCount: !Ref EndpointInstanceCount
+          InitialVariantWeight: 1.0
+          InstanceType: !Ref EndpointInstanceType
+          ModelName: !GetAtt Model.ModelName
+          VariantName: AllTraffic
+      DataCaptureConfig:
+        EnableCapture: !Ref EnableDataCapture
+        InitialSamplingPercentage: !Ref SamplingPercentage
+        DestinationS3Uri: !Ref DataCaptureUploadPath
+        CaptureOptions:
+          - CaptureMode: Input
+          - CaptureMode: Output
+        CaptureContentTypeHeader:
+          CsvContentTypes: ["text/csv"]
+
+  Endpoint:
+    Type: AWS::SageMaker::Endpoint
+    Properties:
+      EndpointName: !Sub ${SageMakerProjectName}-${StageName}
+      EndpointConfigName: !GetAtt EndpointConfig.EndpointConfigName

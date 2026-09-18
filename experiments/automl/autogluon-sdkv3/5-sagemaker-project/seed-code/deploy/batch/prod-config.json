@@ -1,0 +1,9 @@
+{
+  "Parameters": {
+    "StageName": "prod",
+    "TransformInstanceType": "ml.m5.xlarge",
+    "TransformInstanceCount": "1",
+    "ScheduleExpression": "rate(1 day)",
+    "ScheduleEnabled": "true"
+  }
+}

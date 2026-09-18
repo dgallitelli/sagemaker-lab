@@ -1,0 +1,5 @@
+sagemaker>=3.5.0,<4.0
+boto3
+pandas
+jupyter
+pyyaml

@@ -1,0 +1,7 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+COPY requirements.txt /tmp/requirements.txt
+# Install CPU-only torch first to prevent pip from pulling the GPU version (~3GB CUDA libs)
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir -r /tmp/requirements.txt

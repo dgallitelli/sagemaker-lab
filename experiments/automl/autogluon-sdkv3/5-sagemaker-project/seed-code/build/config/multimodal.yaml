@@ -1,0 +1,8 @@
+# Reference config for multimodal (text+tabular fusion) AutoML. Requires a
+# custom preprocess.py that assembles JSONL/CSV rows with your text,
+# numerical, and categorical feature columns plus a label column — see
+# 3-multimodal/0-data-prep/preprocess.py in this repo for an example.
+task_type: multimodal
+label: y
+eval_metric: roc_auc
+presets: medium_quality

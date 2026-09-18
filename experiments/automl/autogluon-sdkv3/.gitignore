@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+!5-sagemaker-project/seed-code/build/
+
+# Virtual environments
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+__MACOSX/
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Data files (large — see README for download instructions)
+*/0-data-prep/data/
+
+# Internal working docs
+.continue-here.md
+blog-post.md
+blog-critique.md
+blog-diagrams/
+
+# Test scripts
+**/test_deploy.py
+
+# Subagent-driven-development scratch state
+.superpowers/
