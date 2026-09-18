@@ -1,0 +1,25 @@
+model:
+  base: "naver/splade-cocondenser-ensembledistil"
+  max_seq_length: 256
+
+training:
+  batch_size: 32
+  ance_batch_size: 16       # smaller batch for ANCE phases (triplets use more VRAM)
+  learning_rate: 2e-5
+  ance_learning_rate: 1e-5  # lower LR for ANCE phases (hard neg gradients are larger)
+  warmup_ratio: 0.1
+  flops_weight: 4e-4       # SPLADE FLOPS regularization — controls sparsity
+  ance_iterations: 1        # 1 iteration sufficient for small datasets; 2 can regress
+  hard_negatives_per_query: 5
+  top_k_mining: 50
+
+evaluation:
+  metrics: [ndcg@10, recall@100, mrr@10]
+  eval_batch_size: 64
+
+# Local mode overrides (used by --local flag in sagemaker_launcher.py)
+local:
+  max_train_queries: 500
+  max_test_queries: 100
+  max_corpus_products: 5000
+  batch_size: 8

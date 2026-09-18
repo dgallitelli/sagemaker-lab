@@ -1,0 +1,10 @@
+sentence-transformers>=5.0.0
+datasets>=2.18.0
+bm25s>=0.2.0
+transformers>=4.40.0
+torch>=2.2.0
+pyyaml
+boto3
+scipy
+numpy
+tqdm
