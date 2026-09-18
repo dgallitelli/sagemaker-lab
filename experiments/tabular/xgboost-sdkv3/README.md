@@ -9,9 +9,9 @@ Predicting oil production from well sensor data using the open-source [Petrobras
 ## Quick Start
 
 ```bash
-# Clone the repo
-git clone https://github.com/dgallitelli/sagemaker-sdk-v3-xgboost-example.git
-cd sagemaker-sdk-v3-xgboost-example
+# Clone the lab and enter this experiment
+git clone https://github.com/dgallitelli/sagemaker-lab.git
+cd sagemaker-lab/experiments/tabular/xgboost-sdkv3
 
 # Open the notebook
 jupyter notebook notebook/gas_lift_optimization.ipynb
