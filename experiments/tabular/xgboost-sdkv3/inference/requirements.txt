@@ -1,0 +1,3 @@
+# Inference dependencies for SageMaker SKLearn 1.4-2 container
+# Place this file at code/requirements.txt in model.tar.gz
+xgboost>=2.0.0

@@ -1,0 +1,4 @@
+# Training dependencies for SageMaker SKLearn 1.4-2 container
+# These are installed before train.py runs
+xgboost>=2.0.0
+scipy>=1.10.0
