@@ -114,8 +114,8 @@ python launch_sft_job.py --model 4b --strategy full --instance-type ml.g6e.4xlar
 # at code/inference.py — picked up automatically by the HF Inference DLC.
 # No post-job download/untar/repack/re-upload dance required.
 python launch_sft_job.py \
-    --inference-handler ./inference.py \
-    --inference-requirements ./requirements.txt   # optional
+    --inference-handler ./sagemaker_code/inference.py \
+    --inference-requirements ./sagemaker_code/requirements.txt   # optional
 ```
 
 ### 3. Customize the recipe

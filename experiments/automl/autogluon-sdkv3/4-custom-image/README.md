@@ -43,7 +43,9 @@ Both sub-experiments use the **tabular classification** (Adult Census) use case 
 
 3. **Python environment**: Use the project's `.venv`:
    ```bash
-   cd sagemaker-autogluon-sdkv3
+   # From the sagemaker-lab repository root
+   cd experiments/automl/autogluon-sdkv3
+   python3 -m venv .venv
    source .venv/bin/activate
    pip install "sagemaker>=3.0,<4.0" boto3 pandas jupyter
    ```

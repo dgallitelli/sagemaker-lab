@@ -9,21 +9,24 @@ permissions:
   contents: read
 
 jobs:
-  python-syntax:
+  structural-checks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: AST parse every Python file
+      - name: Validate Python, notebooks, and relative links
+        run: python scripts/check_repo_structure.py
+
+      - name: Validate shell syntax
+        shell: bash
         run: |
-          set -e
-          mapfile -t pyfiles < <(git ls-files '*.py')
-          echo "Parsing ${#pyfiles[@]} Python files..."
-          for f in "${pyfiles[@]}"; do
-            python -c "import ast, pathlib; ast.parse(pathlib.Path('$f').read_text())" \
-              || { echo "::error file=$f::Failed to parse"; exit 1; }
-          done
+          set -euo pipefail
+          while IFS= read -r script; do
+            bash -n "$script"
+          done < <(git ls-files '*.sh')

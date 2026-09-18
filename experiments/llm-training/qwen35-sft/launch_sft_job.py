@@ -15,8 +15,8 @@ Usage:
 
     # Sideload a SageMaker inference handler so it lands in model.tar.gz
     # at code/inference.py — no manual repacking needed.
-    python launch_sft_job.py --inference-handler ./inference.py \
-        [--inference-requirements ./requirements.txt]
+    python launch_sft_job.py --inference-handler ./sagemaker_code/inference.py \
+        [--inference-requirements ./sagemaker_code/requirements.txt]
 
 Prerequisites:
     pip install sagemaker boto3 datasets

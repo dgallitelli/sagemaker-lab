@@ -26,3 +26,8 @@ redirecting it.
 
 Source histories are imported without squashing. Each imported experiment remains
 self-contained under its destination directory.
+
+The content from `qwen35-sft-sagemaker` pull request
+[`#7`](https://github.com/dgallitelli/qwen35-sft-sagemaker/pull/7) was imported in
+addition to its default branch so the unmerged `docs/g6e-12xl-oom-note` work is not
+lost when the source repository is archived.

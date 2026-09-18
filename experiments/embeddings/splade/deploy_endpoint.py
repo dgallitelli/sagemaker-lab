@@ -11,6 +11,7 @@ Usage:
 import argparse
 import json
 import logging
+import math
 import sys
 import time
 from pathlib import Path
@@ -195,7 +196,6 @@ def evaluate_endpoint(
     Run full evaluation against test set using the deployed endpoint.
     Compares against BM25 baseline and saves final_results.json.
     """
-    import math
     import numpy as np
     from collections import defaultdict
 
