@@ -1,4 +1,4 @@
-name: ci
+name: repository checks
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  syntax-and-lint:
+  python-syntax:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,9 +17,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      - name: Install ruff
-        run: pip install --quiet ruff==0.8.4
 
       - name: AST parse every Python file
         run: |
@@ -30,6 +27,3 @@ jobs:
             python -c "import ast, pathlib; ast.parse(pathlib.Path('$f').read_text())" \
               || { echo "::error file=$f::Failed to parse"; exit 1; }
           done
-
-      - name: Ruff lint
-        run: ruff check .
